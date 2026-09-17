@@ -42,6 +42,7 @@ public class ListeningService extends Service implements RecognitionListener {
     private static final String PREFS = "call_my_phone_prefs";
     private static final String KEY_NAME = "phone_name";
     private static final String KEY_LISTENING = "listening_active";
+    private static final String KEY_LANG = "app_language";
     private static final String CHANNEL_ID = "name_listening";
     private static final int NOTIFICATION_ID = 5001;
 
@@ -87,9 +88,10 @@ public class ListeningService extends Service implements RecognitionListener {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent != null ? intent.getAction() : null;
+
         if (ACTION_STOP_LISTENING.equals(action)) {
             listeningDesired = false;
-            prefs.edit().putBoolean(KEY_LISTENING, false).apply();
+            prefs.edit().putBoolean(KEY_LISTENING, false).commit();
             stopRinging(false);
             destroyRecognizer();
             removeForeground();
@@ -111,10 +113,19 @@ public class ListeningService extends Service implements RecognitionListener {
         }
 
         listeningDesired = true;
-        prefs.edit().putBoolean(KEY_LISTENING, true).apply();
+        prefs.edit().putBoolean(KEY_LISTENING, true).commit();
+        destroyRecognizer();
         ensureRecognizer();
         startRecognitionNow();
         return START_STICKY;
+    }
+
+    private boolean isHebrew() {
+        return "he".equalsIgnoreCase(prefs.getString(KEY_LANG, "en"));
+    }
+
+    private String recognitionLanguage() {
+        return isHebrew() ? "he-IL" : "en-US";
     }
 
     private void startAsForeground(boolean isRinging) {
@@ -136,22 +147,30 @@ public class ListeningService extends Service implements RecognitionListener {
             }
             recognizer.setRecognitionListener(this);
         } catch (Throwable t) {
-            recognizer = SpeechRecognizer.createSpeechRecognizer(this);
-            recognizer.setRecognitionListener(this);
+            try {
+                recognizer = SpeechRecognizer.createSpeechRecognizer(this);
+                recognizer.setRecognitionListener(this);
+            } catch (Throwable ignored) {
+                recognizer = null;
+            }
         }
 
         recognizerIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
         recognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
         recognizerIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true);
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag());
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false);
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionLanguage());
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, recognitionLanguage());
     }
 
     private void startRecognitionNow() {
         if (!listeningDesired || ringing) return;
         ensureRecognizer();
-        if (recognizer == null) return;
+        if (recognizer == null) {
+            scheduleRestart(2000);
+            return;
+        }
         handler.removeCallbacks(restartRecognizer);
         try {
             recognizer.cancel();
@@ -184,7 +203,9 @@ public class ListeningService extends Service implements RecognitionListener {
     private boolean containsName(String spoken, String target) {
         if (spoken.equals(target)) return true;
         String[] words = spoken.split("\\s+");
-        for (String word : words) if (word.equals(target)) return true;
+        for (String word : words) {
+            if (word.equals(target)) return true;
+        }
         return false;
     }
 
@@ -192,8 +213,7 @@ public class ListeningService extends Service implements RecognitionListener {
         if (s == null) return "";
         String out = s.toLowerCase(Locale.ROOT).trim();
         out = Normalizer.normalize(out, Normalizer.Form.NFKD).replaceAll("\\p{M}+", "");
-        out = out.replaceAll("[\\p{Punct}׳״]", " ").replaceAll("\\s+", " ").trim();
-        return out;
+        return out.replaceAll("[\\p{Punct}׳״]", " ").replaceAll("\\s+", " ").trim();
     }
 
     private void triggerRinging() {
@@ -214,8 +234,7 @@ public class ListeningService extends Service implements RecognitionListener {
         try {
             AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
             previousAlarmVolume = am.getStreamVolume(AudioManager.STREAM_ALARM);
-            int max = am.getStreamMaxVolume(AudioManager.STREAM_ALARM);
-            am.setStreamVolume(AudioManager.STREAM_ALARM, max, 0);
+            am.setStreamVolume(AudioManager.STREAM_ALARM, am.getStreamMaxVolume(AudioManager.STREAM_ALARM), 0);
 
             Uri uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
             if (uri == null) uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
@@ -230,8 +249,7 @@ public class ListeningService extends Service implements RecognitionListener {
             mediaPlayer.setLooping(true);
             mediaPlayer.prepare();
             mediaPlayer.start();
-        } catch (Throwable ignored) {
-        }
+        } catch (Throwable ignored) {}
     }
 
     private void stopAlarmSound() {
@@ -269,8 +287,7 @@ public class ListeningService extends Service implements RecognitionListener {
             } else {
                 vibrator.vibrate(pattern, 1);
             }
-        } catch (Throwable ignored) {
-        }
+        } catch (Throwable ignored) {}
     }
 
     private void stopVibration() {
@@ -299,8 +316,7 @@ public class ListeningService extends Service implements RecognitionListener {
         if (cameraManager == null || torchCameraId == null || Build.VERSION.SDK_INT < 23) return;
         try {
             cameraManager.setTorchMode(torchCameraId, enabled);
-        } catch (CameraAccessException | SecurityException | IllegalArgumentException ignored) {
-        }
+        } catch (CameraAccessException | SecurityException | IllegalArgumentException ignored) {}
     }
 
     private void stopRinging(boolean resumeListening) {
@@ -322,6 +338,8 @@ public class ListeningService extends Service implements RecognitionListener {
 
     private Notification buildNotification(boolean isRinging) {
         String name = prefs.getString(KEY_NAME, "");
+        boolean he = isHebrew();
+
         Intent openIntent = new Intent(this, MainActivity.class);
         PendingIntent openPending = PendingIntent.getActivity(this, 10, openIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
@@ -331,9 +349,15 @@ public class ListeningService extends Service implements RecognitionListener {
         PendingIntent stopPending = PendingIntent.getService(this, isRinging ? 12 : 11, stopIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        String title = getString(isRinging ? R.string.notification_ringing_title : R.string.notification_listening_title);
-        String text = isRinging ? getString(R.string.notification_ringing_text)
-                : getString(R.string.notification_listening_text, name);
+        String title = isRinging
+                ? (he ? "מצאתי אותך" : "Phone found")
+                : (he ? "מקשיב לשם של הפלאפון" : "Listening for your phone name");
+        String text = isRinging
+                ? (he ? "הפלאפון מצלצל עכשיו" : "Alarm is ringing")
+                : (he ? "אמור “" + name + "” כדי לגרום לפלאפון לצלצל" : "Say “" + name + "” to make this phone ring");
+        String actionText = isRinging
+                ? (he ? "עצור" : "Stop")
+                : (he ? "כבה האזנה" : "Stop listening");
 
         Notification.Builder b = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(this, CHANNEL_ID)
@@ -344,10 +368,7 @@ public class ListeningService extends Service implements RecognitionListener {
                 .setContentIntent(openPending)
                 .setOngoing(!isRinging)
                 .setCategory(isRinging ? Notification.CATEGORY_ALARM : Notification.CATEGORY_SERVICE)
-                .addAction(new Notification.Action.Builder(
-                        android.R.drawable.ic_media_pause,
-                        getString(isRinging ? R.string.notification_stop : R.string.notification_stop_listening),
-                        stopPending).build());
+                .addAction(new Notification.Action.Builder(android.R.drawable.ic_media_pause, actionText, stopPending).build());
         if (isRinging) b.setPriority(Notification.PRIORITY_MAX);
         return b.build();
     }
@@ -356,20 +377,16 @@ public class ListeningService extends Service implements RecognitionListener {
         if (Build.VERSION.SDK_INT < 26) return;
         NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID,
-                getString(R.string.notification_channel_name),
+                "Call My Phone",
                 NotificationManager.IMPORTANCE_LOW);
-        channel.setDescription(getString(R.string.notification_listening_title));
         NotificationManager nm = getSystemService(NotificationManager.class);
         nm.createNotificationChannel(channel);
     }
 
     @SuppressWarnings("deprecation")
     private void removeForeground() {
-        if (Build.VERSION.SDK_INT >= 24) {
-            stopForeground(STOP_FOREGROUND_REMOVE);
-        } else {
-            stopForeground(true);
-        }
+        if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE);
+        else stopForeground(true);
     }
 
     private void destroyRecognizer() {
@@ -400,7 +417,7 @@ public class ListeningService extends Service implements RecognitionListener {
     @Override
     public void onDestroy() {
         listeningDesired = false;
-        prefs.edit().putBoolean(KEY_LISTENING, false).apply();
+        prefs.edit().putBoolean(KEY_LISTENING, false).commit();
         stopRinging(false);
         destroyRecognizer();
         super.onDestroy();
