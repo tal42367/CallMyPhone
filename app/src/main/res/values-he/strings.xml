@@ -14,6 +14,8 @@
     <string name="status_ringing">שמעתי אותך — מצלצל עכשיו</string>
     <string name="enter_name">קודם צריך לכתוב שם לפלאפון.</string>
     <string name="mic_permission_needed">נדרשת הרשאת מיקרופון כדי שהפלאפון יוכל לשמוע את השם שלו.</string>
+    <string name="speech_recognition_unavailable">לא נמצא שירות זיהוי דיבור במכשיר. צריך לוודא שזיהוי הדיבור של Google או Android מותקן ומופעל.</string>
+    <string name="listening_started">ההאזנה פעילה. אפשר לצאת מהמסך ולקרוא לפלאפון בשם שלו.</string>
     <string name="notification_permission_info">הרשאת התראות מאפשרת להציג שההאזנה פעילה.</string>
     <string name="privacy_note">האפליקציה מעדיפה זיהוי דיבור מקומי במכשירים שתומכים בו. במכשירים ישנים יותר Android עשוי להשתמש בשירות זיהוי הדיבור שמותקן בטלפון.</string>
     <string name="notification_channel_name">האזנה לשם</string>
@@ -23,4 +25,5 @@
     <string name="notification_ringing_text">הפלאפון מצלצל עכשיו.</string>
     <string name="notification_stop">עצור</string>
     <string name="notification_stop_listening">כבה האזנה</string>
+    <string name="switch_language">English</string>
 </resources>
