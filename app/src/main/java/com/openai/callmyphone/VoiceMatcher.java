@@ -70,14 +70,14 @@ public final class VoiceMatcher {
         }
 
         double path = dp[n][m] / Math.max(n, m);
-        double durationPenalty = Math.abs(Math.log((double) n / (double) m)) * 0.16;
+        double durationPenalty = Math.abs(Math.log((double) n / (double) m)) * 0.14;
         return path + durationPenalty;
     }
 
     public static boolean isMatch(double[][] template, short[] candidate) {
         double[][] c = extract(candidate);
         if (c.length < 3) return false;
-        return distance(template, c) < 0.42;
+        return distance(template, c) < 0.48;
     }
 
     public static String encode(double[][] features) {
@@ -141,14 +141,16 @@ public final class VoiceMatcher {
             levels[b] = Math.sqrt(sum / block);
             max = Math.max(max, levels[b]);
         }
-        double threshold = Math.max(420.0, max * 0.22);
+
+        double threshold = Math.max(120.0, max * 0.14);
         int first = 0;
         while (first < blocks && levels[first] < threshold) first++;
         int last = blocks - 1;
         while (last >= first && levels[last] < threshold) last--;
         if (first >= blocks || last < first) return new short[0];
-        first = Math.max(0, first - 1);
-        last = Math.min(blocks - 1, last + 1);
+
+        first = Math.max(0, first - 2);
+        last = Math.min(blocks - 1, last + 2);
         int start = first * block;
         int end = Math.min(pcm.length, (last + 1) * block);
         short[] out = new short[end - start];
@@ -158,7 +160,9 @@ public final class VoiceMatcher {
 
     private static double[] hamming(int n) {
         double[] w = new double[n];
-        for (int i = 0; i < n; i++) w[i] = 0.54 - 0.46 * Math.cos(2.0 * Math.PI * i / (n - 1));
+        for (int i = 0; i < n; i++) {
+            w[i] = 0.54 - 0.46 * Math.cos(2.0 * Math.PI * i / (n - 1));
+        }
         return w;
     }
 
