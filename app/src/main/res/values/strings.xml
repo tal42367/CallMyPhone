@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Call My Phone</string>
+    <string name="title">Call My Phone</string>
+    <string name="subtitle">Give your phone a name. Call that name and it will answer with an alarm.</string>
+    <string name="phone_name_label">Phone name</string>
+    <string name="phone_name_hint">Example: Ruby</string>
+    <string name="start_listening">Start listening</string>
+    <string name="stop_listening">Stop listening</string>
+    <string name="test_alarm">Test alarm</string>
+    <string name="stop_alarm">Stop alarm</string>
+    <string name="status_off">Listening is off</string>
+    <string name="status_on">Listening for: %1$s</string>
+    <string name="status_ringing">I heard you — ringing now</string>
+    <string name="enter_name">Enter a phone name first.</string>
+    <string name="mic_permission_needed">Microphone permission is required so the phone can hear its name.</string>
+    <string name="notification_permission_info">Notification permission keeps the listening service visible while it is active.</string>
+    <string name="privacy_note">Recognition prefers on-device speech recognition when the phone supports it. On older devices, Android may use the installed speech-recognition service.</string>
+    <string name="notification_channel_name">Name listening</string>
+    <string name="notification_listening_title">Listening for your phone name</string>
+    <string name="notification_listening_text">Say “%1$s” to make this phone ring.</string>
+    <string name="notification_ringing_title">Phone found</string>
+    <string name="notification_ringing_text">Alarm is ringing.</string>
+    <string name="notification_stop">Stop</string>
+    <string name="notification_stop_listening">Stop listening</string>
+</resources>
