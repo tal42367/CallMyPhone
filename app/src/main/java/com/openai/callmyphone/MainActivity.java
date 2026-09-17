@@ -174,8 +174,8 @@ public class MainActivity extends Activity {
         testButton.setText(hebrew ? "בדיקת צלצול" : "Test alarm");
         stopAlarmButton.setText(hebrew ? "עצור צלצול" : "Stop alarm");
         noteText.setText(hebrew
-                ? "כשההאזנה פעילה, אפשר לצאת מהאפליקציה ולקרוא לפלאפון בשם ששמרת."
-                : "When listening is active, you can leave the app and call the phone by its saved name.");
+                ? "כשההאזנה פעילה, האפליקציה עוברת לרקע ואפשר להשתמש בטלפון כרגיל."
+                : "When listening is active, the app moves to the background and you can use the phone normally.");
         refreshUi();
     }
 
@@ -246,8 +246,9 @@ public class MainActivity extends Activity {
             prefs.edit().putBoolean(KEY_LISTENING, true).commit();
             refreshUi();
             Toast.makeText(this,
-                    hebrew ? "ההאזנה הופעלה" : "Listening started",
+                    hebrew ? "ההאזנה הופעלה — האפליקציה עוברת לרקע" : "Listening started — moving to background",
                     Toast.LENGTH_SHORT).show();
+            nameInput.postDelayed(() -> moveTaskToBack(true), 650);
         } catch (Throwable t) {
             prefs.edit().putBoolean(KEY_LISTENING, false).commit();
             refreshUi();
