@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">איפה הפלאפון?</string>
+    <string name="title">איפה הפלאפון?</string>
+    <string name="subtitle">תן לפלאפון שם. תקרא בשם שלו והוא יענה בצלצול חזק.</string>
+    <string name="phone_name_label">השם של הפלאפון</string>
+    <string name="phone_name_hint">לדוגמה: רובי</string>
+    <string name="start_listening">הפעל האזנה</string>
+    <string name="stop_listening">כבה האזנה</string>
+    <string name="test_alarm">בדיקת צלצול</string>
+    <string name="stop_alarm">עצור צלצול</string>
+    <string name="status_off">ההאזנה כבויה</string>
+    <string name="status_on">מקשיב לשם: %1$s</string>
+    <string name="status_ringing">שמעתי אותך — מצלצל עכשיו</string>
+    <string name="enter_name">קודם צריך לכתוב שם לפלאפון.</string>
+    <string name="mic_permission_needed">נדרשת הרשאת מיקרופון כדי שהפלאפון יוכל לשמוע את השם שלו.</string>
+    <string name="notification_permission_info">הרשאת התראות מאפשרת להציג שההאזנה פעילה.</string>
+    <string name="privacy_note">האפליקציה מעדיפה זיהוי דיבור מקומי במכשירים שתומכים בו. במכשירים ישנים יותר Android עשוי להשתמש בשירות זיהוי הדיבור שמותקן בטלפון.</string>
+    <string name="notification_channel_name">האזנה לשם</string>
+    <string name="notification_listening_title">מקשיב לשם של הפלאפון</string>
+    <string name="notification_listening_text">אמור “%1$s” כדי לגרום לפלאפון לצלצל.</string>
+    <string name="notification_ringing_title">מצאתי אותך</string>
+    <string name="notification_ringing_text">הפלאפון מצלצל עכשיו.</string>
+    <string name="notification_stop">עצור</string>
+    <string name="notification_stop_listening">כבה האזנה</string>
+</resources>
