@@ -151,15 +151,15 @@ public class ListeningService extends Service {
                 audioRecord = local;
                 local.startRecording();
 
-                final int blockSize = 800; // 50 ms at 16 kHz
+                final int blockSize = 800;
                 short[] block = new short[blockSize];
-                short[] preRoll = new short[blockSize * 4]; // last 200 ms
+                short[] preRoll = new short[blockSize * 4];
                 int preUsed = 0;
                 short[] utterance = new short[VoiceMatcher.SAMPLE_RATE * 3];
                 int used = 0;
                 boolean inSpeech = false;
                 int quietBlocks = 0;
-                double noiseFloor = 220.0;
+                double noiseFloor = 120.0;
                 long ignoreUntil = 0L;
 
                 while (listeningDesired && !ringing) {
@@ -168,14 +168,14 @@ public class ListeningService extends Service {
                     double level = VoiceMatcher.rms(block, n);
 
                     if (!inSpeech) {
-                        if (level < Math.max(650.0, noiseFloor * 2.0)) {
-                            noiseFloor = noiseFloor * 0.96 + Math.min(level, 900.0) * 0.04;
+                        if (level < Math.max(420.0, noiseFloor * 2.0)) {
+                            noiseFloor = noiseFloor * 0.96 + Math.min(level, 700.0) * 0.04;
                         }
 
                         appendPreRoll(preRoll, block, n);
                         preUsed = Math.min(preRoll.length, preUsed + n);
 
-                        double startThreshold = Math.max(650.0, noiseFloor * 2.35);
+                        double startThreshold = Math.max(260.0, noiseFloor * 2.05);
                         if (System.currentTimeMillis() >= ignoreUntil && level >= startThreshold) {
                             inSpeech = true;
                             quietBlocks = 0;
@@ -195,11 +195,11 @@ public class ListeningService extends Service {
                         used += n;
                     }
 
-                    double stopThreshold = Math.max(430.0, noiseFloor * 1.55);
+                    double stopThreshold = Math.max(180.0, noiseFloor * 1.35);
                     if (level < stopThreshold) quietBlocks++;
                     else quietBlocks = 0;
 
-                    boolean longEnough = used >= VoiceMatcher.SAMPLE_RATE / 4;
+                    boolean longEnough = used >= VoiceMatcher.SAMPLE_RATE / 5;
                     boolean finished = longEnough && quietBlocks >= 7;
                     boolean full = used >= utterance.length - blockSize;
 
@@ -211,7 +211,7 @@ public class ListeningService extends Service {
                         used = 0;
                         Arrays.fill(preRoll, (short) 0);
                         preUsed = 0;
-                        ignoreUntil = System.currentTimeMillis() + 350;
+                        ignoreUntil = System.currentTimeMillis() + 300;
 
                         if (match && listeningDesired && !ringing) {
                             handler.post(this::triggerRinging);
