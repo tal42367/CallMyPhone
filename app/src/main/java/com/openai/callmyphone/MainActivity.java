@@ -2,15 +2,15 @@ package com.openai.callmyphone;
 
 import android.Manifest;
 import android.app.Activity;
-import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
-import android.content.res.Configuration;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.speech.SpeechRecognizer;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -37,34 +37,46 @@ public class MainActivity extends Activity {
     private Button testButton;
     private Button stopAlarmButton;
     private Button languageButton;
+    private TextView titleText;
+    private TextView subtitleText;
+    private TextView nameLabel;
+    private TextView saveInfoText;
     private TextView statusText;
+    private TextView noteText;
+    private LinearLayout root;
     private SharedPreferences prefs;
-
-    @Override
-    protected void attachBaseContext(Context newBase) {
-        SharedPreferences p = newBase.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        String lang = p.getString(KEY_LANG, "");
-        if (lang != null && !lang.isEmpty()) {
-            Locale locale = Locale.forLanguageTag(lang);
-            Locale.setDefault(locale);
-            Configuration config = new Configuration(newBase.getResources().getConfiguration());
-            config.setLocale(locale);
-            config.setLayoutDirection(locale);
-            newBase = newBase.createConfigurationContext(config);
-        }
-        super.attachBaseContext(newBase);
-    }
+    private boolean hebrew;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        String savedLang = prefs.getString(KEY_LANG, "");
+        if (savedLang == null || savedLang.isEmpty()) {
+            savedLang = "he".equalsIgnoreCase(Locale.getDefault().getLanguage()) ? "he" : "en";
+            prefs.edit().putString(KEY_LANG, savedLang).commit();
+        }
+        hebrew = "he".equals(savedLang);
+
         setContentView(buildUi());
         nameInput.setText(prefs.getString(KEY_NAME, ""));
+        nameInput.setSelection(nameInput.getText().length());
+
+        nameInput.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                prefs.edit().putString(KEY_NAME, cleanName(s == null ? "" : s.toString())).apply();
+                refreshUi();
+            }
+            @Override public void afterTextChanged(Editable s) {}
+        });
+
         languageButton.setOnClickListener(v -> toggleLanguage());
         listenButton.setOnClickListener(v -> toggleListening());
         testButton.setOnClickListener(v -> testAlarm());
         stopAlarmButton.setOnClickListener(v -> sendServiceAction(ListeningService.ACTION_STOP_RING));
+
+        applyLanguageTexts();
         refreshUi();
     }
 
@@ -74,81 +86,71 @@ public class MainActivity extends Activity {
         refreshUi();
     }
 
+    @Override
+    protected void onPause() {
+        super.onPause();
+        saveCurrentName();
+    }
+
     private View buildUi() {
         int pad = dp(24);
-
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.setBackgroundColor(Color.WHITE);
 
-        LinearLayout root = new LinearLayout(this);
+        root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(pad, dp(30), pad, pad);
+        root.setPadding(pad, dp(28), pad, pad);
         root.setBackgroundColor(Color.WHITE);
         root.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.setLayoutDirection(View.LAYOUT_DIRECTION_LOCALE);
-        scroll.addView(root, new ScrollView.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT));
+        scroll.addView(root, new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        TextView title = new TextView(this);
-        title.setText(R.string.title);
-        title.setTextSize(30);
-        title.setTextColor(Color.rgb(25, 25, 25));
-        title.setGravity(Gravity.CENTER);
-        root.addView(title, lpMatchWrap(0, dp(8)));
+        titleText = text(30, Color.rgb(25, 25, 25), Gravity.CENTER);
+        root.addView(titleText, lpMatchWrap(0, dp(8)));
 
         languageButton = button();
-        languageButton.setText(R.string.switch_language);
         root.addView(languageButton, lpMatch(dp(48), 0, dp(16)));
 
-        TextView subtitle = new TextView(this);
-        subtitle.setText(R.string.subtitle);
-        subtitle.setTextSize(17);
-        subtitle.setTextColor(Color.rgb(80, 80, 80));
-        subtitle.setGravity(Gravity.CENTER);
-        root.addView(subtitle, lpMatchWrap(0, dp(28)));
+        subtitleText = text(17, Color.rgb(80, 80, 80), Gravity.CENTER);
+        root.addView(subtitleText, lpMatchWrap(0, dp(24)));
 
-        TextView label = new TextView(this);
-        label.setText(R.string.phone_name_label);
-        label.setTextSize(16);
-        label.setTextColor(Color.rgb(45, 45, 45));
-        label.setGravity(Gravity.START);
-        root.addView(label, lpMatchWrap(0, dp(8)));
+        nameLabel = text(16, Color.rgb(45, 45, 45), Gravity.START);
+        root.addView(nameLabel, lpMatchWrap(0, dp(8)));
 
         nameInput = new EditText(this);
-        nameInput.setHint(R.string.phone_name_hint);
         nameInput.setTextSize(22);
         nameInput.setSingleLine(true);
         nameInput.setGravity(Gravity.CENTER);
         nameInput.setPadding(dp(12), dp(12), dp(12), dp(12));
-        root.addView(nameInput, lpMatch(dp(58), 0, dp(20)));
+        root.addView(nameInput, lpMatch(dp(58), 0, dp(6)));
 
-        statusText = new TextView(this);
-        statusText.setTextSize(17);
-        statusText.setGravity(Gravity.CENTER);
-        statusText.setTextColor(Color.rgb(45, 45, 45));
-        root.addView(statusText, lpMatchWrap(0, dp(18)));
+        saveInfoText = text(13, Color.rgb(90, 90, 90), Gravity.CENTER);
+        root.addView(saveInfoText, lpMatchWrap(0, dp(16)));
+
+        statusText = text(17, Color.rgb(45, 45, 45), Gravity.CENTER);
+        root.addView(statusText, lpMatchWrap(0, dp(16)));
 
         listenButton = button();
         root.addView(listenButton, lpMatch(dp(56), 0, dp(12)));
 
         testButton = button();
-        testButton.setText(R.string.test_alarm);
         root.addView(testButton, lpMatch(dp(56), 0, dp(12)));
 
         stopAlarmButton = button();
-        stopAlarmButton.setText(R.string.stop_alarm);
-        root.addView(stopAlarmButton, lpMatch(dp(56), 0, dp(26)));
+        root.addView(stopAlarmButton, lpMatch(dp(56), 0, dp(24)));
 
-        TextView note = new TextView(this);
-        note.setText(R.string.privacy_note);
-        note.setTextSize(13);
-        note.setTextColor(Color.rgb(110, 110, 110));
-        note.setGravity(Gravity.CENTER);
-        root.addView(note, lpMatchWrap(0, dp(24)));
+        noteText = text(13, Color.rgb(110, 110, 110), Gravity.CENTER);
+        root.addView(noteText, lpMatchWrap(0, dp(24)));
 
         return scroll;
+    }
+
+    private TextView text(int size, int color, int gravity) {
+        TextView t = new TextView(this);
+        t.setTextSize(size);
+        t.setTextColor(color);
+        t.setGravity(gravity);
+        return t;
     }
 
     private Button button() {
@@ -159,45 +161,53 @@ public class MainActivity extends Activity {
         return b;
     }
 
-    private LinearLayout.LayoutParams lpMatch(int height, int top, int bottom) {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height);
-        p.topMargin = top;
-        p.bottomMargin = bottom;
-        return p;
-    }
-
-    private LinearLayout.LayoutParams lpMatchWrap(int top, int bottom) {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        p.topMargin = top;
-        p.bottomMargin = bottom;
-        return p;
+    private void applyLanguageTexts() {
+        root.setLayoutDirection(hebrew ? View.LAYOUT_DIRECTION_RTL : View.LAYOUT_DIRECTION_LTR);
+        titleText.setText(hebrew ? "איפה הפלאפון?" : "Call My Phone");
+        languageButton.setText(hebrew ? "English" : "עברית");
+        subtitleText.setText(hebrew
+                ? "תן לפלאפון שם. תקרא בשם שלו והוא יענה בצלצול חזק."
+                : "Give your phone a name. Call that name and it will answer with an alarm.");
+        nameLabel.setText(hebrew ? "השם של הפלאפון" : "Phone name");
+        nameInput.setHint(hebrew ? "לדוגמה: רובי" : "Example: Ruby");
+        saveInfoText.setText(hebrew ? "השם נשמר אוטומטית" : "The name is saved automatically");
+        testButton.setText(hebrew ? "בדיקת צלצול" : "Test alarm");
+        stopAlarmButton.setText(hebrew ? "עצור צלצול" : "Stop alarm");
+        noteText.setText(hebrew
+                ? "כשההאזנה פעילה, אפשר לצאת מהאפליקציה ולקרוא לפלאפון בשם ששמרת."
+                : "When listening is active, you can leave the app and call the phone by its saved name.");
+        refreshUi();
     }
 
     private void toggleLanguage() {
-        String current = prefs.getString(KEY_LANG, "");
-        if (current == null || current.isEmpty()) {
-            current = getResources().getConfiguration().getLocales().get(0).getLanguage();
-        }
-        String next = "he".equalsIgnoreCase(current) ? "en" : "he";
-        prefs.edit().putString(KEY_LANG, next).apply();
-        recreate();
+        saveCurrentName();
+        hebrew = !hebrew;
+        prefs.edit().putString(KEY_LANG, hebrew ? "he" : "en").commit();
+        applyLanguageTexts();
+        Toast.makeText(this, hebrew ? "עברית הופעלה" : "English enabled", Toast.LENGTH_SHORT).show();
+    }
+
+    private void saveCurrentName() {
+        if (nameInput == null) return;
+        String name = cleanName(nameInput.getText().toString());
+        prefs.edit().putString(KEY_NAME, name).commit();
     }
 
     private void toggleListening() {
         boolean active = prefs.getBoolean(KEY_LISTENING, false);
         if (active) {
             sendServiceAction(ListeningService.ACTION_STOP_LISTENING);
-            prefs.edit().putBoolean(KEY_LISTENING, false).apply();
+            prefs.edit().putBoolean(KEY_LISTENING, false).commit();
             refreshUi();
             return;
         }
 
-        String name = cleanName(nameInput.getText().toString());
-        if (name.isEmpty()) {
-            Toast.makeText(this, R.string.enter_name, Toast.LENGTH_SHORT).show();
+        saveCurrentName();
+        String name = prefs.getString(KEY_NAME, "");
+        if (name == null || name.isEmpty()) {
+            Toast.makeText(this, hebrew ? "קודם צריך לכתוב שם לפלאפון" : "Enter a phone name first", Toast.LENGTH_SHORT).show();
             return;
         }
-        prefs.edit().putString(KEY_NAME, name).apply();
 
         if (!hasRequiredPermissions()) {
             requestNeededPermissions();
@@ -207,8 +217,7 @@ public class MainActivity extends Activity {
     }
 
     private void testAlarm() {
-        String name = cleanName(nameInput.getText().toString());
-        if (!name.isEmpty()) prefs.edit().putString(KEY_NAME, name).apply();
+        saveCurrentName();
         if (!hasRequiredPermissions()) {
             requestNeededPermissions();
             return;
@@ -221,29 +230,39 @@ public class MainActivity extends Activity {
 
     private void startListeningService() {
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            prefs.edit().putBoolean(KEY_LISTENING, false).apply();
+            prefs.edit().putBoolean(KEY_LISTENING, false).commit();
             refreshUi();
-            Toast.makeText(this, R.string.speech_recognition_unavailable, Toast.LENGTH_LONG).show();
+            Toast.makeText(this,
+                    hebrew ? "לא נמצא שירות זיהוי דיבור פעיל במכשיר" : "No active speech-recognition service was found",
+                    Toast.LENGTH_LONG).show();
             return;
         }
 
         Intent intent = new Intent(this, ListeningService.class);
         intent.setAction(ListeningService.ACTION_START_LISTENING);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent);
-        else startService(intent);
-        prefs.edit().putBoolean(KEY_LISTENING, true).apply();
-        refreshUi();
-        Toast.makeText(this, R.string.listening_started, Toast.LENGTH_LONG).show();
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent);
+            else startService(intent);
+            prefs.edit().putBoolean(KEY_LISTENING, true).commit();
+            refreshUi();
+            Toast.makeText(this,
+                    hebrew ? "ההאזנה הופעלה" : "Listening started",
+                    Toast.LENGTH_SHORT).show();
+        } catch (Throwable t) {
+            prefs.edit().putBoolean(KEY_LISTENING, false).commit();
+            refreshUi();
+            Toast.makeText(this,
+                    hebrew ? "לא הצלחתי להפעיל את ההאזנה" : "Could not start listening",
+                    Toast.LENGTH_LONG).show();
+        }
     }
 
     private void sendServiceAction(String action) {
         Intent intent = new Intent(this, ListeningService.class);
         intent.setAction(action);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && ListeningService.ACTION_STOP_RING.equals(action)) {
-            startForegroundService(intent);
-        } else {
+        try {
             startService(intent);
-        }
+        } catch (Throwable ignored) {}
         refreshUi();
     }
 
@@ -263,11 +282,8 @@ public class MainActivity extends Activity {
                 && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             permissions.add(Manifest.permission.CAMERA);
         }
-        if (permissions.isEmpty()) {
-            startListeningService();
-        } else {
-            requestPermissions(permissions.toArray(new String[0]), REQ_PERMISSIONS);
-        }
+        if (permissions.isEmpty()) startListeningService();
+        else requestPermissions(permissions.toArray(new String[0]), REQ_PERMISSIONS);
     }
 
     @Override
@@ -275,13 +291,12 @@ public class MainActivity extends Activity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode != REQ_PERMISSIONS) return;
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-            String name = cleanName(nameInput.getText().toString());
-            if (!name.isEmpty()) {
-                prefs.edit().putString(KEY_NAME, name).apply();
-                startListeningService();
-            }
+            saveCurrentName();
+            if (!prefs.getString(KEY_NAME, "").isEmpty()) startListeningService();
         } else {
-            Toast.makeText(this, R.string.mic_permission_needed, Toast.LENGTH_LONG).show();
+            Toast.makeText(this,
+                    hebrew ? "חייבים לאשר גישה למיקרופון" : "Microphone permission is required",
+                    Toast.LENGTH_LONG).show();
         }
     }
 
@@ -290,11 +305,32 @@ public class MainActivity extends Activity {
     }
 
     private void refreshUi() {
-        if (prefs == null || listenButton == null) return;
+        if (prefs == null || listenButton == null || statusText == null) return;
         boolean active = prefs.getBoolean(KEY_LISTENING, false);
         String name = prefs.getString(KEY_NAME, "");
-        listenButton.setText(active ? R.string.stop_listening : R.string.start_listening);
-        statusText.setText(active && !name.isEmpty() ? getString(R.string.status_on, name) : getString(R.string.status_off));
+        if (name == null) name = "";
+        listenButton.setText(active
+                ? (hebrew ? "כבה האזנה" : "Stop listening")
+                : (hebrew ? "הפעל האזנה" : "Start listening"));
+        if (active && !name.isEmpty()) {
+            statusText.setText(hebrew ? "מקשיב לשם: " + name : "Listening for: " + name);
+        } else {
+            statusText.setText(hebrew ? "ההאזנה כבויה" : "Listening is off");
+        }
+    }
+
+    private LinearLayout.LayoutParams lpMatch(int height, int top, int bottom) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height);
+        p.topMargin = top;
+        p.bottomMargin = bottom;
+        return p;
+    }
+
+    private LinearLayout.LayoutParams lpMatchWrap(int top, int bottom) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        p.topMargin = top;
+        p.bottomMargin = bottom;
+        return p;
     }
 
     private int dp(int value) {
