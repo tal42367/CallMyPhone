@@ -14,6 +14,8 @@
     <string name="status_ringing">I heard you — ringing now</string>
     <string name="enter_name">Enter a phone name first.</string>
     <string name="mic_permission_needed">Microphone permission is required so the phone can hear its name.</string>
+    <string name="speech_recognition_unavailable">No speech-recognition service was found on this phone. Make sure Google/Android speech recognition is installed and enabled.</string>
+    <string name="listening_started">Listening is active. You can now leave this screen and call the phone by its name.</string>
     <string name="notification_permission_info">Notification permission keeps the listening service visible while it is active.</string>
     <string name="privacy_note">Recognition prefers on-device speech recognition when the phone supports it. On older devices, Android may use the installed speech-recognition service.</string>
     <string name="notification_channel_name">Name listening</string>
@@ -23,4 +25,5 @@
     <string name="notification_ringing_text">Alarm is ringing.</string>
     <string name="notification_stop">Stop</string>
     <string name="notification_stop_listening">Stop listening</string>
+    <string name="switch_language">עברית</string>
 </resources>
