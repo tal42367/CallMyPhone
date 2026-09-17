@@ -13,27 +13,26 @@ import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
 import android.media.AudioAttributes;
+import android.media.AudioFormat;
 import android.media.AudioManager;
+import android.media.AudioRecord;
 import android.media.MediaPlayer;
+import android.media.MediaRecorder;
 import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.os.VibrationAttributes;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.VibratorManager;
-import android.speech.RecognitionListener;
-import android.speech.RecognizerIntent;
-import android.speech.SpeechRecognizer;
 
-import java.text.Normalizer;
-import java.util.ArrayList;
-import java.util.Locale;
+import java.util.Arrays;
 
-public class ListeningService extends Service implements RecognitionListener {
+public class ListeningService extends Service {
     public static final String ACTION_START_LISTENING = "com.openai.callmyphone.START_LISTENING";
     public static final String ACTION_STOP_LISTENING = "com.openai.callmyphone.STOP_LISTENING";
     public static final String ACTION_TEST_RING = "com.openai.callmyphone.TEST_RING";
@@ -43,35 +42,26 @@ public class ListeningService extends Service implements RecognitionListener {
     private static final String KEY_NAME = "phone_name";
     private static final String KEY_LISTENING = "listening_active";
     private static final String KEY_LANG = "app_language";
+    private static final String KEY_PROFILE = "voice_profile";
+    private static final String KEY_PROFILE_NAME = "voice_profile_name";
     private static final String CHANNEL_ID = "name_listening";
     private static final int NOTIFICATION_ID = 5001;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private SharedPreferences prefs;
-    private SpeechRecognizer recognizer;
-    private Intent recognizerIntent;
-    private boolean listeningDesired;
-    private boolean recognitionRunning;
-    private boolean ringing;
+    private volatile boolean listeningDesired;
+    private volatile boolean ringing;
+    private AudioRecord audioRecord;
+    private Thread audioThread;
+    private double[][] voiceTemplate;
+    private PowerManager.WakeLock wakeLock;
+
     private MediaPlayer mediaPlayer;
     private Vibrator vibrator;
     private CameraManager cameraManager;
     private String torchCameraId;
     private boolean torchOn;
     private int previousAlarmVolume = -1;
-    private int previousMediaVolume = -1;
-
-    private final Runnable restartRecognizer = new Runnable() {
-        @Override public void run() {
-            if (listeningDesired && !ringing && !recognitionRunning) startRecognitionNow();
-        }
-    };
-
-    private final Runnable restoreMediaVolume = new Runnable() {
-        @Override public void run() {
-            restoreRecognitionToneVolume();
-        }
-    };
 
     private final Runnable blinkTorch = new Runnable() {
         @Override public void run() {
@@ -110,29 +100,158 @@ public class ListeningService extends Service implements RecognitionListener {
 
         if (ACTION_TEST_RING.equals(action)) {
             listeningDesired = false;
-            recognitionRunning = false;
             prefs.edit().putBoolean(KEY_LISTENING, false).commit();
-            startAsForeground(false);
+            startAsForeground(true);
             triggerRinging();
-            return START_STICKY;
+            return START_NOT_STICKY;
+        }
+
+        if (action == null && !prefs.getBoolean(KEY_LISTENING, false)) {
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+
+        String profileText = prefs.getString(KEY_PROFILE, "");
+        String profileName = prefs.getString(KEY_PROFILE_NAME, "");
+        String currentName = prefs.getString(KEY_NAME, "");
+        voiceTemplate = VoiceMatcher.decode(profileText);
+        if (voiceTemplate.length < 4 || currentName == null || !currentName.equals(profileName)) {
+            prefs.edit().putBoolean(KEY_LISTENING, false).commit();
+            stopSelf();
+            return START_NOT_STICKY;
         }
 
         listeningDesired = true;
-        recognitionRunning = false;
         prefs.edit().putBoolean(KEY_LISTENING, true).commit();
         startAsForeground(false);
-        destroyRecognizer();
-        ensureRecognizer();
-        handler.postDelayed(this::startRecognitionNow, 250);
+        acquireWakeLock();
+        startSilentMicrophoneLoop();
         return START_STICKY;
+    }
+
+    private void startSilentMicrophoneLoop() {
+        stopAudioOnly();
+        listeningDesired = true;
+
+        audioThread = new Thread(() -> {
+            int min = AudioRecord.getMinBufferSize(
+                    VoiceMatcher.SAMPLE_RATE,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT);
+            int bufferSize = Math.max(min, 4096);
+            AudioRecord local = null;
+            try {
+                local = new AudioRecord(
+                        MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                        VoiceMatcher.SAMPLE_RATE,
+                        AudioFormat.CHANNEL_IN_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT,
+                        bufferSize);
+                if (local.getState() != AudioRecord.STATE_INITIALIZED) return;
+                audioRecord = local;
+                local.startRecording();
+
+                final int blockSize = 800; // 50 ms at 16 kHz
+                short[] block = new short[blockSize];
+                short[] preRoll = new short[blockSize * 4]; // last 200 ms
+                int preUsed = 0;
+                short[] utterance = new short[VoiceMatcher.SAMPLE_RATE * 3];
+                int used = 0;
+                boolean inSpeech = false;
+                int quietBlocks = 0;
+                double noiseFloor = 220.0;
+                long ignoreUntil = 0L;
+
+                while (listeningDesired && !ringing) {
+                    int n = local.read(block, 0, block.length);
+                    if (n <= 0) continue;
+                    double level = VoiceMatcher.rms(block, n);
+
+                    if (!inSpeech) {
+                        if (level < Math.max(650.0, noiseFloor * 2.0)) {
+                            noiseFloor = noiseFloor * 0.96 + Math.min(level, 900.0) * 0.04;
+                        }
+
+                        appendPreRoll(preRoll, block, n);
+                        preUsed = Math.min(preRoll.length, preUsed + n);
+
+                        double startThreshold = Math.max(650.0, noiseFloor * 2.35);
+                        if (System.currentTimeMillis() >= ignoreUntil && level >= startThreshold) {
+                            inSpeech = true;
+                            quietBlocks = 0;
+                            used = Math.min(preUsed, utterance.length);
+                            int from = preRoll.length - used;
+                            System.arraycopy(preRoll, from, utterance, 0, used);
+                            if (used + n <= utterance.length) {
+                                System.arraycopy(block, 0, utterance, used, n);
+                                used += n;
+                            }
+                        }
+                        continue;
+                    }
+
+                    if (used + n <= utterance.length) {
+                        System.arraycopy(block, 0, utterance, used, n);
+                        used += n;
+                    }
+
+                    double stopThreshold = Math.max(430.0, noiseFloor * 1.55);
+                    if (level < stopThreshold) quietBlocks++;
+                    else quietBlocks = 0;
+
+                    boolean longEnough = used >= VoiceMatcher.SAMPLE_RATE / 4;
+                    boolean finished = longEnough && quietBlocks >= 7;
+                    boolean full = used >= utterance.length - blockSize;
+
+                    if (finished || full) {
+                        short[] candidate = Arrays.copyOf(utterance, used);
+                        boolean match = VoiceMatcher.isMatch(voiceTemplate, candidate);
+                        inSpeech = false;
+                        quietBlocks = 0;
+                        used = 0;
+                        Arrays.fill(preRoll, (short) 0);
+                        preUsed = 0;
+                        ignoreUntil = System.currentTimeMillis() + 350;
+
+                        if (match && listeningDesired && !ringing) {
+                            handler.post(this::triggerRinging);
+                            break;
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {
+            } finally {
+                if (local != null) {
+                    try { local.stop(); } catch (Throwable ignored) {}
+                    try { local.release(); } catch (Throwable ignored) {}
+                }
+                if (audioRecord == local) audioRecord = null;
+            }
+        }, "silent-name-listener");
+        audioThread.start();
+    }
+
+    private void appendPreRoll(short[] preRoll, short[] block, int n) {
+        if (n >= preRoll.length) {
+            System.arraycopy(block, n - preRoll.length, preRoll, 0, preRoll.length);
+            return;
+        }
+        System.arraycopy(preRoll, n, preRoll, 0, preRoll.length - n);
+        System.arraycopy(block, 0, preRoll, preRoll.length - n, n);
+    }
+
+    private void stopAudioOnly() {
+        AudioRecord ar = audioRecord;
+        audioRecord = null;
+        if (ar != null) {
+            try { ar.stop(); } catch (Throwable ignored) {}
+            try { ar.release(); } catch (Throwable ignored) {}
+        }
+        audioThread = null;
     }
 
     private boolean isHebrew() {
         return "he".equalsIgnoreCase(prefs.getString(KEY_LANG, "en"));
-    }
-
-    private String recognitionLanguage() {
-        return isHebrew() ? "he-IL" : "en-US";
     }
 
     private void startAsForeground(boolean isRinging) {
@@ -144,133 +263,30 @@ public class ListeningService extends Service implements RecognitionListener {
         }
     }
 
-    private void ensureRecognizer() {
-        if (recognizer != null) return;
+    private void acquireWakeLock() {
         try {
-            if (Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
-                recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(this);
-            } else {
-                recognizer = SpeechRecognizer.createSpeechRecognizer(this);
+            if (wakeLock == null) {
+                PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "CallMyPhone:Listening");
+                wakeLock.setReferenceCounted(false);
             }
-            recognizer.setRecognitionListener(this);
-        } catch (Throwable t) {
-            try {
-                recognizer = SpeechRecognizer.createSpeechRecognizer(this);
-                recognizer.setRecognitionListener(this);
-            } catch (Throwable ignored) {
-                recognizer = null;
-            }
-        }
-
-        recognizerIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false);
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionLanguage());
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, recognitionLanguage());
-    }
-
-    private void startRecognitionNow() {
-        if (!listeningDesired || ringing || recognitionRunning) return;
-        ensureRecognizer();
-        if (recognizer == null) {
-            scheduleRestart(2000);
-            return;
-        }
-        handler.removeCallbacks(restartRecognizer);
-        try {
-            // Some Android speech-recognition engines play a short system beep every time
-            // listening starts. Briefly silence the media stream on EVERY recognition cycle,
-            // not only the first one, then restore it as soon as the recognizer is ready.
-            muteRecognitionStartTone();
-            recognitionRunning = true;
-            recognizer.startListening(recognizerIntent);
-        } catch (Throwable t) {
-            recognitionRunning = false;
-            restoreRecognitionToneVolume();
-            scheduleRestart(1500);
-        }
-    }
-
-    private void muteRecognitionStartTone() {
-        try {
-            AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
-            // If a previous cycle is still inside its tiny mute window, restore first so we
-            // always remember the user's real volume rather than accidentally remembering 0.
-            if (previousMediaVolume >= 0) {
-                restoreRecognitionToneVolume();
-            }
-            previousMediaVolume = am.getStreamVolume(AudioManager.STREAM_MUSIC);
-            if (previousMediaVolume > 0) {
-                am.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0);
-            }
-            handler.removeCallbacks(restoreMediaVolume);
-            handler.postDelayed(restoreMediaVolume, 900);
-        } catch (Throwable ignored) {
-            previousMediaVolume = -1;
-        }
-    }
-
-    private void restoreRecognitionToneVolume() {
-        handler.removeCallbacks(restoreMediaVolume);
-        if (previousMediaVolume < 0) return;
-        try {
-            AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
-            am.setStreamVolume(AudioManager.STREAM_MUSIC, previousMediaVolume, 0);
+            if (!wakeLock.isHeld()) wakeLock.acquire();
         } catch (Throwable ignored) {}
-        previousMediaVolume = -1;
     }
 
-    private void scheduleRestart(long delayMs) {
-        handler.removeCallbacks(restartRecognizer);
-        if (listeningDesired && !ringing && !recognitionRunning) {
-            handler.postDelayed(restartRecognizer, delayMs);
+    private void releaseWakeLock() {
+        if (wakeLock != null) {
+            try { if (wakeLock.isHeld()) wakeLock.release(); } catch (Throwable ignored) {}
         }
-    }
-
-    private void inspectResults(android.os.Bundle results) {
-        if (results == null || ringing) return;
-        ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-        if (matches == null) return;
-        String target = normalize(prefs.getString(KEY_NAME, ""));
-        if (target.isEmpty()) return;
-
-        for (String candidate : matches) {
-            if (containsName(normalize(candidate), target)) {
-                triggerRinging();
-                return;
-            }
-        }
-    }
-
-    private boolean containsName(String spoken, String target) {
-        if (spoken.equals(target)) return true;
-        String[] words = spoken.split("\\s+");
-        for (String word : words) {
-            if (word.equals(target)) return true;
-        }
-        return false;
-    }
-
-    private String normalize(String s) {
-        if (s == null) return "";
-        String out = s.toLowerCase(Locale.ROOT).trim();
-        out = Normalizer.normalize(out, Normalizer.Form.NFKD).replaceAll("\\p{M}+", "");
-        return out.replaceAll("[\\p{Punct}׳״]", " ").replaceAll("\\s+", " ").trim();
     }
 
     private void triggerRinging() {
         if (ringing) return;
         ringing = true;
         listeningDesired = false;
-        recognitionRunning = false;
         prefs.edit().putBoolean(KEY_LISTENING, false).commit();
-        restoreRecognitionToneVolume();
-        handler.removeCallbacks(restartRecognizer);
-        if (recognizer != null) {
-            try { recognizer.cancel(); } catch (Throwable ignored) {}
-        }
+        stopAudioOnly();
+        releaseWakeLock();
         startAsForeground(true);
         startAlarmSound();
         startVibration();
@@ -328,9 +344,11 @@ public class ListeningService extends Service implements RecognitionListener {
             if (Build.VERSION.SDK_INT >= 26) {
                 VibrationEffect effect = VibrationEffect.createWaveform(pattern, 1);
                 if (Build.VERSION.SDK_INT >= 33) {
-                    vibrator.vibrate(effect, new VibrationAttributes.Builder().setUsage(VibrationAttributes.USAGE_ALARM).build());
+                    vibrator.vibrate(effect,
+                            new VibrationAttributes.Builder().setUsage(VibrationAttributes.USAGE_ALARM).build());
                 } else {
-                    AudioAttributes attrs = new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build();
+                    AudioAttributes attrs = new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ALARM).build();
                     vibrator.vibrate(effect, attrs);
                 }
             } else {
@@ -350,7 +368,8 @@ public class ListeningService extends Service implements RecognitionListener {
         try {
             cameraManager = (CameraManager) getSystemService(CAMERA_SERVICE);
             for (String id : cameraManager.getCameraIdList()) {
-                Boolean hasFlash = cameraManager.getCameraCharacteristics(id).get(CameraCharacteristics.FLASH_INFO_AVAILABLE);
+                Boolean hasFlash = cameraManager.getCameraCharacteristics(id)
+                        .get(CameraCharacteristics.FLASH_INFO_AVAILABLE);
                 if (Boolean.TRUE.equals(hasFlash)) {
                     torchCameraId = id;
                     break;
@@ -380,12 +399,10 @@ public class ListeningService extends Service implements RecognitionListener {
 
     private void stopListeningAndSelf() {
         listeningDesired = false;
-        recognitionRunning = false;
         prefs.edit().putBoolean(KEY_LISTENING, false).commit();
-        handler.removeCallbacks(restartRecognizer);
-        restoreRecognitionToneVolume();
+        stopAudioOnly();
+        releaseWakeLock();
         stopRinging();
-        destroyRecognizer();
         removeForeground();
         stopSelf();
     }
@@ -395,20 +412,23 @@ public class ListeningService extends Service implements RecognitionListener {
         boolean he = isHebrew();
 
         Intent openIntent = new Intent(this, MainActivity.class);
-        PendingIntent openPending = PendingIntent.getActivity(this, 10, openIntent,
+        PendingIntent openPending = PendingIntent.getActivity(
+                this, 10, openIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
         Intent stopIntent = new Intent(this, ListeningService.class);
         stopIntent.setAction(isRinging ? ACTION_STOP_RING : ACTION_STOP_LISTENING);
-        PendingIntent stopPending = PendingIntent.getService(this, isRinging ? 12 : 11, stopIntent,
+        PendingIntent stopPending = PendingIntent.getService(
+                this, isRinging ? 12 : 11, stopIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
         String title = isRinging
                 ? (he ? "מצאתי אותך" : "Phone found")
-                : (he ? "מקשיב לשם של הפלאפון" : "Listening for your phone name");
+                : (he ? "מקשיב בשקט לשם של הפלאפון" : "Silently listening for your phone name");
         String text = isRinging
                 ? (he ? "הפלאפון מצלצל עכשיו" : "Alarm is ringing")
-                : (he ? "אמור “" + name + "” כדי לגרום לפלאפון לצלצל" : "Say “" + name + "” to make this phone ring");
+                : (he ? "קרא “" + name + "” כדי לגרום לפלאפון לצלצל"
+                      : "Call “" + name + "” to make this phone ring");
         String actionText = isRinging
                 ? (he ? "עצור" : "Stop")
                 : (he ? "כבה האזנה" : "Stop listening");
@@ -422,7 +442,10 @@ public class ListeningService extends Service implements RecognitionListener {
                 .setContentIntent(openPending)
                 .setOngoing(!isRinging)
                 .setCategory(isRinging ? Notification.CATEGORY_ALARM : Notification.CATEGORY_SERVICE)
-                .addAction(new Notification.Action.Builder(android.R.drawable.ic_media_pause, actionText, stopPending).build());
+                .addAction(new Notification.Action.Builder(
+                        android.R.drawable.ic_media_pause,
+                        actionText,
+                        stopPending).build());
         if (isRinging) b.setPriority(Notification.PRIORITY_MAX);
         return b.build();
     }
@@ -433,6 +456,7 @@ public class ListeningService extends Service implements RecognitionListener {
                 CHANNEL_ID,
                 "Call My Phone",
                 NotificationManager.IMPORTANCE_LOW);
+        channel.setDescription("Background name listening");
         NotificationManager nm = getSystemService(NotificationManager.class);
         nm.createNotificationChannel(channel);
     }
@@ -443,52 +467,13 @@ public class ListeningService extends Service implements RecognitionListener {
         else stopForeground(true);
     }
 
-    private void destroyRecognizer() {
-        handler.removeCallbacks(restartRecognizer);
-        recognitionRunning = false;
-        if (recognizer != null) {
-            try { recognizer.cancel(); } catch (Throwable ignored) {}
-            try { recognizer.destroy(); } catch (Throwable ignored) {}
-            recognizer = null;
-        }
-    }
-
-    @Override public void onReadyForSpeech(android.os.Bundle params) {
-        recognitionRunning = true;
-        restoreRecognitionToneVolume();
-    }
-    @Override public void onBeginningOfSpeech() {}
-    @Override public void onRmsChanged(float rmsdB) {}
-    @Override public void onBufferReceived(byte[] buffer) {}
-    @Override public void onEndOfSpeech() {
-        recognitionRunning = false;
-        scheduleRestart(800);
-    }
-    @Override public void onError(int error) {
-        recognitionRunning = false;
-        restoreRecognitionToneVolume();
-        long delay = (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) ? 1800 : 900;
-        scheduleRestart(delay);
-    }
-    @Override public void onResults(android.os.Bundle results) {
-        recognitionRunning = false;
-        restoreRecognitionToneVolume();
-        inspectResults(results);
-        if (!ringing) scheduleRestart(650);
-    }
-    @Override public void onPartialResults(android.os.Bundle partialResults) {
-        inspectResults(partialResults);
-    }
-    @Override public void onEvent(int eventType, android.os.Bundle params) {}
-
     @Override
     public void onDestroy() {
         listeningDesired = false;
-        recognitionRunning = false;
         prefs.edit().putBoolean(KEY_LISTENING, false).commit();
-        restoreRecognitionToneVolume();
+        stopAudioOnly();
+        releaseWakeLock();
         stopRinging();
-        destroyRecognizer();
         super.onDestroy();
     }
 
