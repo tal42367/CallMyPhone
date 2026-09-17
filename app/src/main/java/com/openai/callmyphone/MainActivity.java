@@ -6,34 +6,54 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
-import android.provider.Settings;
+import android.speech.SpeechRecognizer;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 public class MainActivity extends Activity {
     private static final int REQ_PERMISSIONS = 1001;
     private static final String PREFS = "call_my_phone_prefs";
     private static final String KEY_NAME = "phone_name";
     private static final String KEY_LISTENING = "listening_active";
+    private static final String KEY_LANG = "app_language";
 
     private EditText nameInput;
     private Button listenButton;
     private Button testButton;
     private Button stopAlarmButton;
+    private Button languageButton;
     private TextView statusText;
     private SharedPreferences prefs;
+
+    @Override
+    protected void attachBaseContext(Context newBase) {
+        SharedPreferences p = newBase.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        String lang = p.getString(KEY_LANG, "");
+        if (lang != null && !lang.isEmpty()) {
+            Locale locale = Locale.forLanguageTag(lang);
+            Locale.setDefault(locale);
+            Configuration config = new Configuration(newBase.getResources().getConfiguration());
+            config.setLocale(locale);
+            config.setLayoutDirection(locale);
+            newBase = newBase.createConfigurationContext(config);
+        }
+        super.attachBaseContext(newBase);
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -41,6 +61,7 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         setContentView(buildUi());
         nameInput.setText(prefs.getString(KEY_NAME, ""));
+        languageButton.setOnClickListener(v -> toggleLanguage());
         listenButton.setOnClickListener(v -> toggleListening());
         testButton.setOnClickListener(v -> testAlarm());
         stopAlarmButton.setOnClickListener(v -> sendServiceAction(ListeningService.ACTION_STOP_RING));
@@ -55,11 +76,20 @@ public class MainActivity extends Activity {
 
     private View buildUi() {
         int pad = dp(24);
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setBackgroundColor(Color.WHITE);
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(pad, dp(36), pad, pad);
+        root.setPadding(pad, dp(30), pad, pad);
         root.setBackgroundColor(Color.WHITE);
         root.setGravity(Gravity.CENTER_HORIZONTAL);
+        root.setLayoutDirection(View.LAYOUT_DIRECTION_LOCALE);
+        scroll.addView(root, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
 
         TextView title = new TextView(this);
         title.setText(R.string.title);
@@ -67,6 +97,10 @@ public class MainActivity extends Activity {
         title.setTextColor(Color.rgb(25, 25, 25));
         title.setGravity(Gravity.CENTER);
         root.addView(title, lpMatchWrap(0, dp(8)));
+
+        languageButton = button();
+        languageButton.setText(R.string.switch_language);
+        root.addView(languageButton, lpMatch(dp(48), 0, dp(16)));
 
         TextView subtitle = new TextView(this);
         subtitle.setText(R.string.subtitle);
@@ -79,6 +113,7 @@ public class MainActivity extends Activity {
         label.setText(R.string.phone_name_label);
         label.setTextSize(16);
         label.setTextColor(Color.rgb(45, 45, 45));
+        label.setGravity(Gravity.START);
         root.addView(label, lpMatchWrap(0, dp(8)));
 
         nameInput = new EditText(this);
@@ -111,16 +146,16 @@ public class MainActivity extends Activity {
         note.setTextSize(13);
         note.setTextColor(Color.rgb(110, 110, 110));
         note.setGravity(Gravity.CENTER);
-        root.addView(note, lpMatchWrap(0, 0));
+        root.addView(note, lpMatchWrap(0, dp(24)));
 
-        return root;
+        return scroll;
     }
 
     private Button button() {
         Button b = new Button(this);
         b.setTextSize(17);
         b.setAllCaps(false);
-        b.setMinHeight(dp(52));
+        b.setMinHeight(dp(48));
         return b;
     }
 
@@ -136,6 +171,16 @@ public class MainActivity extends Activity {
         p.topMargin = top;
         p.bottomMargin = bottom;
         return p;
+    }
+
+    private void toggleLanguage() {
+        String current = prefs.getString(KEY_LANG, "");
+        if (current == null || current.isEmpty()) {
+            current = getResources().getConfiguration().getLocales().get(0).getLanguage();
+        }
+        String next = "he".equalsIgnoreCase(current) ? "en" : "he";
+        prefs.edit().putString(KEY_LANG, next).apply();
+        recreate();
     }
 
     private void toggleListening() {
@@ -175,18 +220,30 @@ public class MainActivity extends Activity {
     }
 
     private void startListeningService() {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            prefs.edit().putBoolean(KEY_LISTENING, false).apply();
+            refreshUi();
+            Toast.makeText(this, R.string.speech_recognition_unavailable, Toast.LENGTH_LONG).show();
+            return;
+        }
+
         Intent intent = new Intent(this, ListeningService.class);
         intent.setAction(ListeningService.ACTION_START_LISTENING);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent);
         else startService(intent);
         prefs.edit().putBoolean(KEY_LISTENING, true).apply();
         refreshUi();
+        Toast.makeText(this, R.string.listening_started, Toast.LENGTH_LONG).show();
     }
 
     private void sendServiceAction(String action) {
         Intent intent = new Intent(this, ListeningService.class);
         intent.setAction(action);
-        startService(intent);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && ListeningService.ACTION_STOP_RING.equals(action)) {
+            startForegroundService(intent);
+        } else {
+            startService(intent);
+        }
         refreshUi();
     }
 
@@ -206,7 +263,11 @@ public class MainActivity extends Activity {
                 && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             permissions.add(Manifest.permission.CAMERA);
         }
-        requestPermissions(permissions.toArray(new String[0]), REQ_PERMISSIONS);
+        if (permissions.isEmpty()) {
+            startListeningService();
+        } else {
+            requestPermissions(permissions.toArray(new String[0]), REQ_PERMISSIONS);
+        }
     }
 
     @Override
