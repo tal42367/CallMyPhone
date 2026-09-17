@@ -53,7 +53,6 @@ public class ListeningService extends Service implements RecognitionListener {
     private boolean listeningDesired;
     private boolean recognitionRunning;
     private boolean ringing;
-    private boolean suppressNextStartTone;
     private MediaPlayer mediaPlayer;
     private Vibrator vibrator;
     private CameraManager cameraManager;
@@ -120,7 +119,6 @@ public class ListeningService extends Service implements RecognitionListener {
 
         listeningDesired = true;
         recognitionRunning = false;
-        suppressNextStartTone = true;
         prefs.edit().putBoolean(KEY_LISTENING, true).commit();
         startAsForeground(false);
         destroyRecognizer();
@@ -182,10 +180,10 @@ public class ListeningService extends Service implements RecognitionListener {
         }
         handler.removeCallbacks(restartRecognizer);
         try {
-            if (suppressNextStartTone) {
-                suppressNextStartTone = false;
-                muteRecognitionStartTone();
-            }
+            // Some Android speech-recognition engines play a short system beep every time
+            // listening starts. Briefly silence the media stream on EVERY recognition cycle,
+            // not only the first one, then restore it as soon as the recognizer is ready.
+            muteRecognitionStartTone();
             recognitionRunning = true;
             recognizer.startListening(recognizerIntent);
         } catch (Throwable t) {
@@ -198,12 +196,17 @@ public class ListeningService extends Service implements RecognitionListener {
     private void muteRecognitionStartTone() {
         try {
             AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
+            // If a previous cycle is still inside its tiny mute window, restore first so we
+            // always remember the user's real volume rather than accidentally remembering 0.
+            if (previousMediaVolume >= 0) {
+                restoreRecognitionToneVolume();
+            }
             previousMediaVolume = am.getStreamVolume(AudioManager.STREAM_MUSIC);
             if (previousMediaVolume > 0) {
                 am.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0);
             }
             handler.removeCallbacks(restoreMediaVolume);
-            handler.postDelayed(restoreMediaVolume, 650);
+            handler.postDelayed(restoreMediaVolume, 900);
         } catch (Throwable ignored) {
             previousMediaVolume = -1;
         }
@@ -378,7 +381,6 @@ public class ListeningService extends Service implements RecognitionListener {
     private void stopListeningAndSelf() {
         listeningDesired = false;
         recognitionRunning = false;
-        suppressNextStartTone = false;
         prefs.edit().putBoolean(KEY_LISTENING, false).commit();
         handler.removeCallbacks(restartRecognizer);
         restoreRecognitionToneVolume();
@@ -464,11 +466,13 @@ public class ListeningService extends Service implements RecognitionListener {
     }
     @Override public void onError(int error) {
         recognitionRunning = false;
+        restoreRecognitionToneVolume();
         long delay = (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) ? 1800 : 900;
         scheduleRestart(delay);
     }
     @Override public void onResults(android.os.Bundle results) {
         recognitionRunning = false;
+        restoreRecognitionToneVolume();
         inspectResults(results);
         if (!ringing) scheduleRestart(650);
     }
