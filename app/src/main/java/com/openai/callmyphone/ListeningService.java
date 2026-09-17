@@ -51,17 +51,26 @@ public class ListeningService extends Service implements RecognitionListener {
     private SpeechRecognizer recognizer;
     private Intent recognizerIntent;
     private boolean listeningDesired;
+    private boolean recognitionRunning;
     private boolean ringing;
+    private boolean suppressNextStartTone;
     private MediaPlayer mediaPlayer;
     private Vibrator vibrator;
     private CameraManager cameraManager;
     private String torchCameraId;
     private boolean torchOn;
     private int previousAlarmVolume = -1;
+    private int previousMediaVolume = -1;
 
     private final Runnable restartRecognizer = new Runnable() {
         @Override public void run() {
-            if (listeningDesired && !ringing) startRecognitionNow();
+            if (listeningDesired && !ringing && !recognitionRunning) startRecognitionNow();
+        }
+    };
+
+    private final Runnable restoreMediaVolume = new Runnable() {
+        @Override public void run() {
+            restoreRecognitionToneVolume();
         }
     };
 
@@ -90,33 +99,33 @@ public class ListeningService extends Service implements RecognitionListener {
         String action = intent != null ? intent.getAction() : null;
 
         if (ACTION_STOP_LISTENING.equals(action)) {
-            listeningDesired = false;
-            prefs.edit().putBoolean(KEY_LISTENING, false).commit();
-            stopRinging(false);
-            destroyRecognizer();
-            removeForeground();
-            stopSelf();
+            stopListeningAndSelf();
             return START_NOT_STICKY;
         }
 
         if (ACTION_STOP_RING.equals(action)) {
-            stopRinging(true);
-            return START_STICKY;
+            stopRinging();
+            stopListeningAndSelf();
+            return START_NOT_STICKY;
         }
 
-        startAsForeground(false);
-
         if (ACTION_TEST_RING.equals(action)) {
-            listeningDesired = prefs.getBoolean(KEY_LISTENING, false);
+            listeningDesired = false;
+            recognitionRunning = false;
+            prefs.edit().putBoolean(KEY_LISTENING, false).commit();
+            startAsForeground(false);
             triggerRinging();
             return START_STICKY;
         }
 
         listeningDesired = true;
+        recognitionRunning = false;
+        suppressNextStartTone = true;
         prefs.edit().putBoolean(KEY_LISTENING, true).commit();
+        startAsForeground(false);
         destroyRecognizer();
         ensureRecognizer();
-        startRecognitionNow();
+        handler.postDelayed(this::startRecognitionNow, 250);
         return START_STICKY;
     }
 
@@ -165,7 +174,7 @@ public class ListeningService extends Service implements RecognitionListener {
     }
 
     private void startRecognitionNow() {
-        if (!listeningDesired || ringing) return;
+        if (!listeningDesired || ringing || recognitionRunning) return;
         ensureRecognizer();
         if (recognizer == null) {
             scheduleRestart(2000);
@@ -173,16 +182,48 @@ public class ListeningService extends Service implements RecognitionListener {
         }
         handler.removeCallbacks(restartRecognizer);
         try {
-            recognizer.cancel();
+            if (suppressNextStartTone) {
+                suppressNextStartTone = false;
+                muteRecognitionStartTone();
+            }
+            recognitionRunning = true;
             recognizer.startListening(recognizerIntent);
         } catch (Throwable t) {
+            recognitionRunning = false;
+            restoreRecognitionToneVolume();
             scheduleRestart(1500);
         }
     }
 
+    private void muteRecognitionStartTone() {
+        try {
+            AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
+            previousMediaVolume = am.getStreamVolume(AudioManager.STREAM_MUSIC);
+            if (previousMediaVolume > 0) {
+                am.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0);
+            }
+            handler.removeCallbacks(restoreMediaVolume);
+            handler.postDelayed(restoreMediaVolume, 650);
+        } catch (Throwable ignored) {
+            previousMediaVolume = -1;
+        }
+    }
+
+    private void restoreRecognitionToneVolume() {
+        handler.removeCallbacks(restoreMediaVolume);
+        if (previousMediaVolume < 0) return;
+        try {
+            AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
+            am.setStreamVolume(AudioManager.STREAM_MUSIC, previousMediaVolume, 0);
+        } catch (Throwable ignored) {}
+        previousMediaVolume = -1;
+    }
+
     private void scheduleRestart(long delayMs) {
         handler.removeCallbacks(restartRecognizer);
-        if (listeningDesired && !ringing) handler.postDelayed(restartRecognizer, delayMs);
+        if (listeningDesired && !ringing && !recognitionRunning) {
+            handler.postDelayed(restartRecognizer, delayMs);
+        }
     }
 
     private void inspectResults(android.os.Bundle results) {
@@ -219,6 +260,11 @@ public class ListeningService extends Service implements RecognitionListener {
     private void triggerRinging() {
         if (ringing) return;
         ringing = true;
+        listeningDesired = false;
+        recognitionRunning = false;
+        prefs.edit().putBoolean(KEY_LISTENING, false).commit();
+        restoreRecognitionToneVolume();
+        handler.removeCallbacks(restartRecognizer);
         if (recognizer != null) {
             try { recognizer.cancel(); } catch (Throwable ignored) {}
         }
@@ -319,7 +365,7 @@ public class ListeningService extends Service implements RecognitionListener {
         } catch (CameraAccessException | SecurityException | IllegalArgumentException ignored) {}
     }
 
-    private void stopRinging(boolean resumeListening) {
+    private void stopRinging() {
         if (!ringing) return;
         ringing = false;
         handler.removeCallbacks(blinkTorch);
@@ -327,13 +373,19 @@ public class ListeningService extends Service implements RecognitionListener {
         torchOn = false;
         stopAlarmSound();
         stopVibration();
+    }
 
-        if (resumeListening && listeningDesired) {
-            startAsForeground(false);
-            scheduleRestart(800);
-        } else if (!listeningDesired) {
-            removeForeground();
-        }
+    private void stopListeningAndSelf() {
+        listeningDesired = false;
+        recognitionRunning = false;
+        suppressNextStartTone = false;
+        prefs.edit().putBoolean(KEY_LISTENING, false).commit();
+        handler.removeCallbacks(restartRecognizer);
+        restoreRecognitionToneVolume();
+        stopRinging();
+        destroyRecognizer();
+        removeForeground();
+        stopSelf();
     }
 
     private Notification buildNotification(boolean isRinging) {
@@ -391,6 +443,7 @@ public class ListeningService extends Service implements RecognitionListener {
 
     private void destroyRecognizer() {
         handler.removeCallbacks(restartRecognizer);
+        recognitionRunning = false;
         if (recognizer != null) {
             try { recognizer.cancel(); } catch (Throwable ignored) {}
             try { recognizer.destroy(); } catch (Throwable ignored) {}
@@ -398,27 +451,39 @@ public class ListeningService extends Service implements RecognitionListener {
         }
     }
 
-    @Override public void onReadyForSpeech(android.os.Bundle params) {}
+    @Override public void onReadyForSpeech(android.os.Bundle params) {
+        recognitionRunning = true;
+        restoreRecognitionToneVolume();
+    }
     @Override public void onBeginningOfSpeech() {}
     @Override public void onRmsChanged(float rmsdB) {}
     @Override public void onBufferReceived(byte[] buffer) {}
-    @Override public void onEndOfSpeech() { scheduleRestart(450); }
+    @Override public void onEndOfSpeech() {
+        recognitionRunning = false;
+        scheduleRestart(800);
+    }
     @Override public void onError(int error) {
-        long delay = (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) ? 1800 : 700;
+        recognitionRunning = false;
+        long delay = (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) ? 1800 : 900;
         scheduleRestart(delay);
     }
     @Override public void onResults(android.os.Bundle results) {
+        recognitionRunning = false;
         inspectResults(results);
-        if (!ringing) scheduleRestart(350);
+        if (!ringing) scheduleRestart(650);
     }
-    @Override public void onPartialResults(android.os.Bundle partialResults) { inspectResults(partialResults); }
+    @Override public void onPartialResults(android.os.Bundle partialResults) {
+        inspectResults(partialResults);
+    }
     @Override public void onEvent(int eventType, android.os.Bundle params) {}
 
     @Override
     public void onDestroy() {
         listeningDesired = false;
+        recognitionRunning = false;
         prefs.edit().putBoolean(KEY_LISTENING, false).commit();
-        stopRinging(false);
+        restoreRecognitionToneVolume();
+        stopRinging();
         destroyRecognizer();
         super.onDestroy();
     }
