@@ -2,6 +2,7 @@ package com.openai.callmyphone;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -16,6 +17,7 @@ import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -74,7 +76,7 @@ public class MainActivity extends Activity {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
             @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
                 prefs.edit().putString(KEY_NAME, cleanName(s == null ? "" : s.toString())).apply();
-                refreshUi();
+                if (!enrolling) refreshUi();
             }
             @Override public void afterTextChanged(Editable s) {}
         });
@@ -110,7 +112,9 @@ public class MainActivity extends Activity {
         root.setPadding(pad, dp(28), pad, pad);
         root.setBackgroundColor(Color.WHITE);
         root.setGravity(Gravity.CENTER_HORIZONTAL);
-        scroll.addView(root, new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        scroll.addView(root, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
 
         titleText = text(30, Color.rgb(25, 25, 25), Gravity.CENTER);
         root.addView(titleText, lpMatchWrap(0, dp(8)));
@@ -184,8 +188,8 @@ public class MainActivity extends Activity {
         testButton.setText(hebrew ? "בדיקת צלצול" : "Test alarm");
         stopAlarmButton.setText(hebrew ? "עצור צלצול" : "Stop alarm");
         noteText.setText(hebrew
-                ? "הגרסה הזאת משתמשת במיקרופון ישירות ולא במנוע הדיבור של Android, ולכן אין צפצוף המתנה."
-                : "This version uses the microphone directly instead of Android speech recognition, so there is no recognizer waiting beep.");
+                ? "אין שימוש במנוע הדיבור של Android, ולכן ההאזנה עצמה שקטה."
+                : "Android speech recognition is not used, so background listening itself is silent.");
         refreshUi();
     }
 
@@ -208,16 +212,29 @@ public class MainActivity extends Activity {
         return !name.isEmpty() && name.equals(learned) && profile != null && !profile.isEmpty();
     }
 
+    private void hideKeyboard() {
+        try {
+            nameInput.clearFocus();
+            InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) imm.hideSoftInputFromWindow(nameInput.getWindowToken(), 0);
+        } catch (Throwable ignored) {}
+    }
+
     private void requestEnrollment() {
         if (enrolling) return;
         saveCurrentName();
         String name = prefs.getString(KEY_NAME, "");
         if (name == null || name.isEmpty()) {
-            Toast.makeText(this, hebrew ? "קודם כתוב שם לפלאפון" : "Enter a phone name first", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this,
+                    hebrew ? "קודם כתוב שם לפלאפון" : "Enter a phone name first",
+                    Toast.LENGTH_SHORT).show();
             return;
         }
+
+        hideKeyboard();
         sendServiceAction(ListeningService.ACTION_STOP_LISTENING);
         prefs.edit().putBoolean(KEY_LISTENING, false).commit();
+
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             pendingEnroll = true;
             requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_PERMISSIONS);
@@ -230,67 +247,75 @@ public class MainActivity extends Activity {
         if (enrolling) return;
         enrolling = true;
         learnButton.setEnabled(false);
+        listenButton.setEnabled(false);
+        String name = prefs.getString(KEY_NAME, "");
+        statusText.setText(hebrew
+                ? "🎙️ מקליט עכשיו — אמור: " + name
+                : "🎙️ Recording now — say: " + name);
         Toast.makeText(this,
-                hebrew ? "אמור עכשיו את השם פעם אחת, בקול רגיל" : "Say the name once now, in your normal voice",
+                hebrew ? "יש לך כ־3 שניות לומר את השם" : "You have about 3 seconds to say the name",
                 Toast.LENGTH_LONG).show();
 
         new Thread(() -> {
-            short[] captured = captureOneUtterance();
+            try { Thread.sleep(350); } catch (InterruptedException ignored) {}
+            short[] captured = captureTrainingWindow();
             double[][] features = VoiceMatcher.extract(captured);
             String encoded = VoiceMatcher.encode(features);
             String currentName = prefs.getString(KEY_NAME, "");
-            boolean ok = features.length >= 4 && !encoded.isEmpty() && currentName != null && !currentName.isEmpty();
+            boolean ok = features.length >= 4
+                    && !encoded.isEmpty()
+                    && currentName != null
+                    && !currentName.isEmpty();
+
             if (ok) {
                 prefs.edit()
                         .putString(KEY_PROFILE, encoded)
                         .putString(KEY_PROFILE_NAME, currentName)
                         .commit();
             }
+
             runOnUiThread(() -> {
                 enrolling = false;
                 learnButton.setEnabled(true);
+                listenButton.setEnabled(true);
                 refreshUi();
                 Toast.makeText(this,
                         ok
-                                ? (hebrew ? "השם נלמד בהצלחה" : "Voice name learned")
-                                : (hebrew ? "לא שמעתי את השם מספיק ברור. נסה שוב." : "I did not hear the name clearly enough. Try again."),
+                                ? (hebrew ? "✅ השם נלמד בהצלחה" : "✅ Voice name learned")
+                                : (hebrew ? "לא קלטתי את הקול. נסה שוב ודבר קרוב לפלאפון." : "I did not capture your voice. Try again closer to the phone."),
                         Toast.LENGTH_LONG).show();
             });
         }, "voice-enrollment").start();
     }
 
-    private short[] captureOneUtterance() {
-        int min = AudioRecord.getMinBufferSize(VoiceMatcher.SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
+    private short[] captureTrainingWindow() {
+        int min = AudioRecord.getMinBufferSize(
+                VoiceMatcher.SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT);
         int bufferSize = Math.max(min, 4096);
         AudioRecord ar = null;
         try {
-            ar = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            ar = new AudioRecord(
+                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
                     VoiceMatcher.SAMPLE_RATE,
                     AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT,
                     bufferSize);
             if (ar.getState() != AudioRecord.STATE_INITIALIZED) return new short[0];
-            ar.startRecording();
-            short[] block = new short[800];
-            short[] all = new short[VoiceMatcher.SAMPLE_RATE * 3];
-            int used = 0;
-            boolean started = false;
-            int quietBlocks = 0;
-            long endAt = System.currentTimeMillis() + 4500;
 
-            while (System.currentTimeMillis() < endAt && used < all.length - block.length) {
-                int n = ar.read(block, 0, block.length);
+            short[] all = new short[VoiceMatcher.SAMPLE_RATE * 4];
+            short[] block = new short[800];
+            int used = 0;
+            long endAt = System.currentTimeMillis() + 3200;
+            ar.startRecording();
+
+            while (System.currentTimeMillis() < endAt && used < all.length) {
+                int maxRead = Math.min(block.length, all.length - used);
+                int n = ar.read(block, 0, maxRead);
                 if (n <= 0) continue;
-                double rms = VoiceMatcher.rms(block, n);
-                if (!started) {
-                    if (rms > 550) started = true;
-                    else continue;
-                }
                 System.arraycopy(block, 0, all, used, n);
                 used += n;
-                if (rms < 420) quietBlocks++; else quietBlocks = 0;
-                if (used > VoiceMatcher.SAMPLE_RATE / 3 && quietBlocks >= 6) break;
             }
             return Arrays.copyOf(all, used);
         } catch (Throwable t) {
@@ -311,6 +336,7 @@ public class MainActivity extends Activity {
             refreshUi();
             return;
         }
+
         saveCurrentName();
         if (!hasProfileForCurrentName()) {
             Toast.makeText(this,
@@ -369,10 +395,17 @@ public class MainActivity extends Activity {
 
     private void requestNeededPermissions() {
         List<String> permissions = new ArrayList<>();
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) permissions.add(Manifest.permission.RECORD_AUDIO);
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) permissions.add(Manifest.permission.POST_NOTIFICATIONS);
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            permissions.add(Manifest.permission.RECORD_AUDIO);
+        }
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            permissions.add(Manifest.permission.POST_NOTIFICATIONS);
+        }
         if (getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA_FLASH)
-                && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) permissions.add(Manifest.permission.CAMERA);
+                && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            permissions.add(Manifest.permission.CAMERA);
+        }
         if (permissions.isEmpty()) startListeningService();
         else requestPermissions(permissions.toArray(new String[0]), REQ_PERMISSIONS);
     }
@@ -381,11 +414,15 @@ public class MainActivity extends Activity {
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode != REQ_PERMISSIONS) return;
+
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            Toast.makeText(this, hebrew ? "חייבים לאשר מיקרופון" : "Microphone permission is required", Toast.LENGTH_LONG).show();
+            Toast.makeText(this,
+                    hebrew ? "חייבים לאשר מיקרופון" : "Microphone permission is required",
+                    Toast.LENGTH_LONG).show();
             pendingEnroll = false;
             return;
         }
+
         if (pendingEnroll) {
             pendingEnroll = false;
             beginEnrollment();
@@ -399,32 +436,43 @@ public class MainActivity extends Activity {
     }
 
     private void refreshUi() {
-        if (prefs == null || listenButton == null || statusText == null) return;
+        if (prefs == null || listenButton == null || statusText == null || enrolling) return;
         boolean active = prefs.getBoolean(KEY_LISTENING, false);
         boolean learned = hasProfileForCurrentName();
         String name = prefs.getString(KEY_NAME, "");
         if (name == null) name = "";
+
         listenButton.setText(active
                 ? (hebrew ? "כבה האזנה" : "Stop listening")
                 : (hebrew ? "הפעל האזנה" : "Start listening"));
+
         if (active && !name.isEmpty()) {
-            statusText.setText(hebrew ? "מקשיב בשקט לשם: " + name : "Silently listening for: " + name);
+            statusText.setText(hebrew
+                    ? "מקשיב בשקט לשם: " + name
+                    : "Silently listening for: " + name);
         } else if (learned) {
-            statusText.setText(hebrew ? "השם נלמד — מוכן להפעלה" : "Voice name learned — ready");
+            statusText.setText(hebrew
+                    ? "✅ השם נלמד — מוכן להפעלה"
+                    : "✅ Voice name learned — ready");
         } else {
-            statusText.setText(hebrew ? "צריך ללמד את השם בקול פעם אחת" : "Teach the spoken name once");
+            statusText.setText(hebrew
+                    ? "צריך ללמד את השם בקול פעם אחת"
+                    : "Teach the spoken name once");
         }
     }
 
     private LinearLayout.LayoutParams lpMatch(int height, int top, int bottom) {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, height);
         p.topMargin = top;
         p.bottomMargin = bottom;
         return p;
     }
 
     private LinearLayout.LayoutParams lpMatchWrap(int top, int bottom) {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
         p.topMargin = top;
         p.bottomMargin = bottom;
         return p;
