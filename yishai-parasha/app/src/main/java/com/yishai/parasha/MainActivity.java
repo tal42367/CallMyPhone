@@ -25,18 +25,12 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     private WebView webView;
     private TextToSpeech tts;
     private boolean ttsReady = false;
+    private static final int REQUEST_MEDIA_PERMISSIONS = 1001;
 
     @Override
     @SuppressLint({"SetJavaScriptEnabled", "JavascriptInterface"})
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
-        if (android.os.Build.VERSION.SDK_INT >= 23) {
-            requestPermissions(new String[]{
-                    Manifest.permission.CAMERA,
-                    Manifest.permission.RECORD_AUDIO
-            }, 1001);
-        }
 
         tts = new TextToSpeech(this, this);
 
@@ -119,6 +113,30 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         }
     }
 
+    private boolean hasAllMediaPermissions() {
+        return checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED &&
+                checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void notifyWebPermissions(boolean granted) {
+        runOnUiThread(() -> {
+            if (webView != null) {
+                webView.evaluateJavascript(
+                        "if(window.onNativePermissionsResult){window.onNativePermissionsResult(" + (granted ? "true" : "false") + ");}",
+                        null
+                );
+            }
+        });
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_MEDIA_PERMISSIONS) {
+            notifyWebPermissions(hasAllMediaPermissions());
+        }
+    }
+
     private void notifyWebTtsDone() {
         runOnUiThread(() -> {
             if (webView != null) {
@@ -142,6 +160,25 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                 } else {
                     notifyWebTtsDone();
                 }
+            });
+        }
+
+        @JavascriptInterface
+        public boolean hasMediaPermissions() {
+            return hasAllMediaPermissions();
+        }
+
+        @JavascriptInterface
+        public void requestMediaPermissions() {
+            runOnUiThread(() -> {
+                if (hasAllMediaPermissions()) {
+                    notifyWebPermissions(true);
+                    return;
+                }
+                requestPermissions(new String[]{
+                        Manifest.permission.CAMERA,
+                        Manifest.permission.RECORD_AUDIO
+                }, REQUEST_MEDIA_PERMISSIONS);
             });
         }
 
