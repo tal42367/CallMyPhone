@@ -378,15 +378,25 @@ el('startInterviewBtn').onclick = async () => {
   sessionName = sessionName || el('parasha').value.trim();
   clips = [];
   currentIndex = 0;
+
+  const nativeMode = window.Android && typeof window.Android.startNativeRecording === 'function';
+  if (nativeMode) {
+    const ok = await requestNativeMediaPermissions();
+    if (!ok) {
+      alert('צריך לאשר מצלמה ומיקרופון כדי להתחיל.');
+      return;
+    }
+    showScreen('interviewScreen');
+    showCurrentQuestion();
+    captionBox.textContent = 'המצלמה תיפתח במסך מלא כשתלחץ על התחל צילום';
+    return;
+  }
+
   try {
     await ensureCamera();
   } catch (e) {
     const code = e && (e.name || e.message) ? String(e.name || e.message) : 'unknown';
-    if (code.includes('NotAllowed') || code.includes('permission')) {
-      alert('האפליקציה עדיין לא קיבלה הרשאה למצלמה ולמיקרופון. לחץ שוב על התחלת הראיון ואשר את שתי ההרשאות של Android.');
-    } else {
-      alert('לא הצלחתי לפתוח את המצלמה והמיקרופון (' + code + '). אני מנסה הגדרות מצלמה פשוטות אוטומטית; אם ההודעה חוזרת, שלח לי צילום שלה.');
-    }
+    alert('לא הצלחתי לפתוח את המצלמה (' + code + ').');
     return;
   }
   showScreen('interviewScreen');
@@ -396,6 +406,28 @@ el('startInterviewBtn').onclick = async () => {
 el('speakBtn').onclick = () => speak(questions[currentIndex], null);
 
 el('startRecordBtn').onclick = () => {
+  if (window.Android && typeof window.Android.startNativeRecording === 'function') {
+    currentTranscript = '';
+    el('recordState').textContent = 'פותח מצלמה…';
+    el('startRecordBtn').disabled = true;
+    el('retakeBtn').disabled = true;
+    el('nextBtn').disabled = true;
+    captionBox.textContent = 'עובר למצלמת Android…';
+    try {
+      window.Android.startNativeRecording(
+        currentIndex,
+        questions[currentIndex],
+        Number(settings.voiceRate),
+        !!(settings.interviewerReaction && currentIndex > 0)
+      );
+    } catch (_) {
+      el('recordState').textContent = 'מוכן';
+      el('startRecordBtn').disabled = false;
+      alert('לא הצלחתי לפתוח את מסך הצילום.');
+    }
+    return;
+  }
+
   if (!stream || !stream.active) return alert('המצלמה לא פעילה.');
   recorderChunks = [];
   currentTranscript = '';
@@ -452,6 +484,43 @@ el('startRecordBtn').onclick = () => {
   speak(spoken, startRecognitionNow);
 };
 
+
+window.onNativeClipRecorded = function(index, url, answerStartSecValue) {
+  if (index < 0 || index >= questions.length) return;
+  const old = clips[index];
+  if (old && old.native && old.url && window.Android && typeof window.Android.deleteRecording === 'function') {
+    try { window.Android.deleteRecording(old.url); } catch (_) {}
+  }
+  clips[index] = {
+    question: questions[index],
+    transcript: '',
+    blob: null,
+    url: url,
+    type: 'video/mp4',
+    native: true,
+    answerStartSec: Number(answerStartSecValue) || 2.5
+  };
+  currentIndex = index;
+  el('recordState').textContent = 'התשובה נשמרה';
+  el('startRecordBtn').disabled = true;
+  el('stopRecordBtn').disabled = true;
+  el('retakeBtn').disabled = false;
+  el('nextBtn').disabled = false;
+  captionBox.textContent = 'הצילום נשמר. את הכתוביות אפשר לתקן בסוף הראיון.';
+};
+
+window.onNativeClipCancelled = function(index) {
+  if (index >= 0 && index < questions.length) currentIndex = index;
+  el('recordState').textContent = clips[currentIndex] ? 'מצולם' : 'מוכן';
+  el('startRecordBtn').disabled = !!clips[currentIndex];
+  el('stopRecordBtn').disabled = true;
+  el('retakeBtn').disabled = !clips[currentIndex];
+  el('nextBtn').disabled = !clips[currentIndex];
+  captionBox.textContent = clips[currentIndex]
+    ? 'הצילום הקודם עדיין שמור'
+    : 'הצילום בוטל. אפשר לנסות שוב.';
+};
+
 el('stopRecordBtn').onclick = () => {
   try { if (recognition) recognition.stop(); } catch (_) {}
   recognition = null;
@@ -463,7 +532,11 @@ el('stopRecordBtn').onclick = () => {
 el('retakeBtn').onclick = () => {
   const old = clips[currentIndex];
   if (old && old.url) {
-    try { URL.revokeObjectURL(old.url); } catch (_) {}
+    if (old.native && window.Android && typeof window.Android.deleteRecording === 'function') {
+      try { window.Android.deleteRecording(old.url); } catch (_) {}
+    } else {
+      try { URL.revokeObjectURL(old.url); } catch (_) {}
+    }
   }
   clips[currentIndex] = null;
   currentTranscript = '';
@@ -536,12 +609,15 @@ function renderClips() {
     remove.textContent = '↻ חזור לצילום';
     remove.onclick = async () => {
       currentIndex = i;
-      try { await ensureCamera(); } catch (_) {
-        alert('לא הצלחתי לפתוח את המצלמה.');
-        return;
-      }
       showScreen('interviewScreen');
       showCurrentQuestion();
+      if (window.Android && typeof window.Android.startNativeRecording === 'function') {
+        captionBox.textContent = 'לחץ על התחל צילום כדי לפתוח שוב את המצלמה';
+        return;
+      }
+      try { await ensureCamera(); } catch (_) {
+        alert('לא הצלחתי לפתוח את המצלמה.');
+      }
     };
     mini.appendChild(listen);
     mini.appendChild(remove);
@@ -833,7 +909,14 @@ el('saveFinalBtn').onclick = async () => {
 };
 
 el('newProgramBtn').onclick = () => {
-  clips.forEach(c => { if (c && c.url) try { URL.revokeObjectURL(c.url); } catch (_) {} });
+  clips.forEach(c => {
+    if (!c || !c.url) return;
+    if (c.native && window.Android && typeof window.Android.deleteRecording === 'function') {
+      try { window.Android.deleteRecording(c.url); } catch (_) {}
+    } else {
+      try { URL.revokeObjectURL(c.url); } catch (_) {}
+    }
+  });
   clips = [];
   questions = [];
   currentIndex = 0;
