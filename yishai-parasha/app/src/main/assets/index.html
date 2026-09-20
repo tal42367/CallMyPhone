@@ -22,8 +22,8 @@
       <button id="homeVideosBtn" class="home-action big">📁 הסרטונים שלי</button>
       <button id="homeSettingsBtn" class="home-action big">⚙️ הגדרות המראיין והסרטון</button>
       <div class="card info-card">
-        <strong>גרסה 0.4</strong>
-        <p>הצילום בגרסה הזאת משתמש במצלמת Android Native כדי לעבוד בצורה יציבה. המראיין שואל בקול, אפשר לצלם מחדש, לערוך כתוביות וליצור Rough Cut.</p>
+        <strong>גרסה 0.5</strong>
+        <p>הצילום משתמש במצלמת Android Native. בזמן התשובה האפליקציה מנסה ליצור כתוביות עברית אוטומטיות, ובעריכה הן מקבלות אפקט Pop ונצרבות לסרטון.</p>
       </div>
     </section>
 
@@ -102,10 +102,10 @@
       </div>
       <div class="card">
         <h2>🎬 לפני העריכה</h2>
-        <p class="small">בדוק את הכתוביות. אם הזיהוי האוטומטי פספס, אפשר לתקן כאן לפני שהטקסט נצרב בסרטון.</p>
+        <p class="small">הכתוביות נוצרות אוטומטית בעברית בזמן התשובה. אם הזיהוי פספס מילה, אפשר לתקן כאן לפני שהטקסט נצרב לסרטון.</p>
         <div id="clipsList" class="clips"></div>
         <button id="autoEditBtn" class="primary mega">✨ ערוך סרטון אוטומטית</button>
-        <p class="small">העריכה מחברת את כל הקטעים, מוסיפה פתיח וסיום, מציגה את השאלה ומצריבה את הכתוביות בעברית. ב־0.4 קטעי המקור נשמרים כ־MP4. ה־Rough Cut האוטומטי עדיין מיוצא כ־WebM בשלב הזה.</p>
+        <p class="small">העריכה מחברת את כל הקטעים, מוסיפה פתיח וסיום, מציגה את השאלה ומצריבה את הכתוביות בעברית. ב־0.5 קטעי המקור נשמרים כ־MP4, והכתוביות העבריות האוטומטיות נצרבות בעריכה עם אפקט. ה־Rough Cut הסופי עדיין מיוצא כ־WebM בשלב הזה.</p>
       </div>
     </section>
 
@@ -156,6 +156,12 @@
 
         <label class="toggle-row"><input id="showQuestionInVideo" type="checkbox" checked /><span>להציג את השאלה על הסרטון</span></label>
         <label class="toggle-row"><input id="interviewerReaction" type="checkbox" checked /><span>המראיין אומר “יפה מאוד ישי” בין שאלות</span></label>
+
+        <label for="captionEffect">אפקט כתוביות</label>
+        <select id="captionEffect">
+          <option value="pop" selected>Pop דינמי</option>
+          <option value="clean">נקי ועדין</option>
+        </select>
 
         <label for="introSeconds">אורך פתיח</label>
         <select id="introSeconds">
