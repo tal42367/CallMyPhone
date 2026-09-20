@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <meta name="theme-color" content="#111827" />
+  <meta name="theme-color" content="#08111f" />
   <title>פשוט פרשה עם ישי</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -13,57 +13,171 @@
       <div class="logo-badge">📖</div>
       <div>
         <h1>פשוט פרשה עם ישי</h1>
-        <p>מראיין קולי • צילום תשובות • כתוביות בעברית</p>
+        <p>מראיין קולי • צילום • כתוביות • עריכה אוטומטית</p>
       </div>
     </header>
 
-    <section id="setupCard" class="card">
-      <h2>מתחילים תוכנית חדשה</h2>
-      <label for="parasha">שם הפרשה</label>
-      <input id="parasha" type="text" placeholder="לדוגמה: פרשת נח" autocomplete="off" />
-
-      <label for="questionCount">כמה שאלות?</label>
-      <select id="questionCount">
-        <option value="4">4 שאלות</option>
-        <option value="5" selected>5 שאלות</option>
-        <option value="6">6 שאלות</option>
-      </select>
-
-      <button id="prepareBtn" class="primary">🎙️ הכן ראיון</button>
-      <p class="small">בגרסה הזאת האפליקציה שואלת בקול, ישי מצלם כל תשובה בנפרד, והכתוביות נשמרות יחד עם כל תשובה.</p>
+    <section id="homeScreen" class="screen">
+      <button id="homeStartBtn" class="home-action primary big">🎬 התחל פרשת השבוע</button>
+      <button id="homeVideosBtn" class="home-action big">📁 הסרטונים שלי</button>
+      <button id="homeSettingsBtn" class="home-action big">⚙️ הגדרות המראיין והסרטון</button>
+      <div class="card info-card">
+        <strong>גרסה 0.3</strong>
+        <p>הגרסה הזאת בנויה לטסט מלא: המראיין שואל בקול, אתה עונה למצלמה, אפשר לצלם מחדש, לערוך כתוביות וליצור Rough Cut אחד עם כתוביות צרובות.</p>
+      </div>
     </section>
 
-    <section id="interviewCard" class="card hidden">
-      <div class="progress-row">
-        <span id="progressText">שאלה 1 מתוך 5</span>
+    <section id="setupScreen" class="screen hidden">
+      <div class="topbar">
+        <button class="icon-btn backHome">←</button>
+        <strong>תוכנית חדשה</strong>
+        <span></span>
+      </div>
+      <div class="card">
+        <h2>איזו פרשה מצלמים?</h2>
+        <label for="parasha">שם הפרשה</label>
+        <div class="input-row">
+          <input id="parasha" type="text" placeholder="לדוגמה: פרשת נח" autocomplete="off" />
+          <button id="detectParashaBtn">📅 השבוע</button>
+        </div>
+
+        <label for="questionCount">כמה שאלות?</label>
+        <select id="questionCount">
+          <option value="4">4 שאלות</option>
+          <option value="5" selected>5 שאלות</option>
+          <option value="6">6 שאלות</option>
+        </select>
+
+        <button id="prepareQuestionsBtn" class="primary wide">✨ הכן שאלות</button>
+      </div>
+    </section>
+
+    <section id="questionsScreen" class="screen hidden">
+      <div class="topbar">
+        <button id="backToSetupBtn" class="icon-btn">←</button>
+        <strong>השאלות של המראיין</strong>
+        <span></span>
+      </div>
+      <div class="card">
+        <p class="small">אפשר לשנות כל שאלה לפני הצילום. המראיין יקריא בדיוק את הטקסט שרשום כאן.</p>
+        <div id="questionsEditor" class="questions-editor"></div>
+        <button id="addQuestionBtn" class="wide">＋ הוסף שאלה</button>
+        <button id="startInterviewBtn" class="primary wide">🎙️ התחל ראיון וצילום</button>
+      </div>
+    </section>
+
+    <section id="interviewScreen" class="screen hidden">
+      <div class="topbar">
+        <button id="quitInterviewBtn" class="icon-btn">✕</button>
+        <strong id="progressText">שאלה 1 מתוך 5</strong>
         <span id="recordState" class="pill">מוכן</span>
       </div>
 
-      <h2 id="questionText">השאלה תופיע כאן</h2>
-      <div class="actions two">
-        <button id="speakBtn">🔊 השמע שוב</button>
-        <button id="startRecordBtn" class="primary">● התחל תשובה</button>
+      <div class="interview-stage">
+        <video id="preview" autoplay muted playsinline></video>
+        <div class="question-overlay" id="questionOverlay"></div>
+        <div class="live-caption" id="captionBox">הכתוביות יופיעו כאן בזמן הדיבור</div>
       </div>
 
-      <video id="preview" autoplay muted playsinline></video>
-
-      <div id="captionBox" class="caption-box">הכתוביות של ישי יופיעו כאן בזמן הדיבור</div>
-
-      <div class="actions two">
-        <button id="stopRecordBtn" class="danger" disabled>■ סיימתי לענות</button>
-        <button id="nextBtn" disabled>השאלה הבאה ←</button>
+      <div class="card interview-controls">
+        <h2 id="questionText">השאלה תופיע כאן</h2>
+        <div class="actions two">
+          <button id="speakBtn">🔊 השמע שאלה</button>
+          <button id="startRecordBtn" class="primary">● התחל צילום</button>
+        </div>
+        <div class="actions two">
+          <button id="stopRecordBtn" class="danger" disabled>■ סיימתי לענות</button>
+          <button id="retakeBtn" disabled>↻ צלם מחדש</button>
+        </div>
+        <button id="nextBtn" class="wide" disabled>השאלה הבאה ←</button>
+        <p class="small">טיפ: בלחיצה על “התחל צילום” ההקלטה מתחילה לפני קול המראיין, כדי שגם השאלה תיכנס לקטע המצולם.</p>
       </div>
     </section>
 
-    <section id="finishCard" class="card hidden">
-      <h2>🎬 הראיון הושלם</h2>
-      <p>כל תשובה נשמרה כקליפ נפרד עם טקסט הכתוביות שלה.</p>
-      <div id="clipsList" class="clips"></div>
-      <div class="actions two">
-        <button id="exportProjectBtn" class="primary">⬇️ שמור קובץ פרויקט</button>
-        <button id="restartBtn">התחל מחדש</button>
+    <section id="finishScreen" class="screen hidden">
+      <div class="topbar">
+        <button class="icon-btn backHome">⌂</button>
+        <strong>הראיון הושלם</strong>
+        <span></span>
       </div>
-      <p class="small">השלב הבא שנוסיף: חיבור אוטומטי של השאלות והקליפים, צריבת הכתוביות ויצירת Reel אחד מוכן לפרסום.</p>
+      <div class="card">
+        <h2>🎬 לפני העריכה</h2>
+        <p class="small">בדוק את הכתוביות. אם הזיהוי האוטומטי פספס, אפשר לתקן כאן לפני שהטקסט נצרב בסרטון.</p>
+        <div id="clipsList" class="clips"></div>
+        <button id="autoEditBtn" class="primary mega">✨ ערוך סרטון אוטומטית</button>
+        <p class="small">העריכה מחברת את כל הקטעים, מוסיפה פתיח וסיום, מציגה את השאלה ומצריבה את הכתוביות בעברית. ב־0.3 התוצאה היא WebM איכותי; המרה ל־MP4 תיכנס בשלב הבא.</p>
+      </div>
+    </section>
+
+    <section id="editingScreen" class="screen hidden">
+      <div class="card center-card">
+        <div class="spinner"></div>
+        <h2>עורך את הסרטון…</h2>
+        <p id="editStatus">מכין פתיח</p>
+        <div class="progress-track"><div id="editProgress" class="progress-fill"></div></div>
+        <p class="small">אל תסגור את האפליקציה בזמן העריכה.</p>
+      </div>
+    </section>
+
+    <section id="resultScreen" class="screen hidden">
+      <div class="topbar">
+        <button class="icon-btn backHome">⌂</button>
+        <strong>הסרטון מוכן</strong>
+        <span></span>
+      </div>
+      <div class="card">
+        <h2>✅ Rough Cut מוכן</h2>
+        <video id="finalVideo" controls playsinline></video>
+        <div class="actions two">
+          <button id="saveFinalBtn" class="primary">💾 שמור בסרטונים שלי</button>
+          <button id="downloadFinalBtn">⬇️ הורד קובץ</button>
+        </div>
+        <button id="newProgramBtn" class="wide">🎬 צור תוכנית חדשה</button>
+      </div>
+    </section>
+
+    <section id="settingsScreen" class="screen hidden">
+      <div class="topbar">
+        <button class="icon-btn backHome">←</button>
+        <strong>הגדרות</strong>
+        <span></span>
+      </div>
+      <div class="card">
+        <label for="voiceRate">מהירות קול המראיין</label>
+        <input id="voiceRate" type="range" min="0.75" max="1.15" step="0.05" value="0.92" />
+        <div class="value-row"><span>איטי</span><strong id="voiceRateValue">0.92</strong><span>מהיר</span></div>
+
+        <label for="subtitleSize">גודל כתוביות</label>
+        <select id="subtitleSize">
+          <option value="34">רגיל</option>
+          <option value="40" selected>גדול</option>
+          <option value="48">גדול מאוד</option>
+        </select>
+
+        <label class="toggle-row"><input id="showQuestionInVideo" type="checkbox" checked /><span>להציג את השאלה על הסרטון</span></label>
+        <label class="toggle-row"><input id="interviewerReaction" type="checkbox" checked /><span>המראיין אומר “יפה מאוד ישי” בין שאלות</span></label>
+
+        <label for="introSeconds">אורך פתיח</label>
+        <select id="introSeconds">
+          <option value="1.5">1.5 שניות</option>
+          <option value="2.2" selected>2.2 שניות</option>
+          <option value="3">3 שניות</option>
+        </select>
+
+        <button id="testVoiceBtn" class="wide">🔊 בדיקת קול</button>
+        <button id="saveSettingsBtn" class="primary wide">שמור הגדרות</button>
+      </div>
+    </section>
+
+    <section id="videosScreen" class="screen hidden">
+      <div class="topbar">
+        <button class="icon-btn backHome">←</button>
+        <strong>הסרטונים שלי</strong>
+        <span></span>
+      </div>
+      <div class="card">
+        <div id="savedVideosList" class="saved-videos"></div>
+      </div>
     </section>
   </main>
 
