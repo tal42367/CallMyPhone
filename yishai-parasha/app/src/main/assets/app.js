@@ -26,7 +26,8 @@ let settings = {
   subtitleSize: 40,
   showQuestionInVideo: true,
   interviewerReaction: true,
-  introSeconds: 2.2
+  introSeconds: 2.2,
+  captionEffect: 'pop'
 };
 
 function showScreen(id) {
@@ -46,6 +47,7 @@ function loadSettings() {
   el('showQuestionInVideo').checked = !!settings.showQuestionInVideo;
   el('interviewerReaction').checked = !!settings.interviewerReaction;
   el('introSeconds').value = String(settings.introSeconds);
+  if (el('captionEffect')) el('captionEffect').value = settings.captionEffect || 'pop';
 }
 
 function readSettingsFromUi() {
@@ -54,6 +56,7 @@ function readSettingsFromUi() {
   settings.showQuestionInVideo = el('showQuestionInVideo').checked;
   settings.interviewerReaction = el('interviewerReaction').checked;
   settings.introSeconds = Number(el('introSeconds').value);
+  if (el('captionEffect')) settings.captionEffect = el('captionEffect').value || 'pop';
 }
 
 function saveSettings() {
@@ -485,7 +488,7 @@ el('startRecordBtn').onclick = () => {
 };
 
 
-window.onNativeClipRecorded = function(index, url, answerStartSecValue) {
+window.onNativeClipRecorded = function(index, url, answerStartSecValue, transcriptText) {
   if (index < 0 || index >= questions.length) return;
   const old = clips[index];
   if (old && old.native && old.url && window.Android && typeof window.Android.deleteRecording === 'function') {
@@ -493,7 +496,7 @@ window.onNativeClipRecorded = function(index, url, answerStartSecValue) {
   }
   clips[index] = {
     question: questions[index],
-    transcript: '',
+    transcript: String(transcriptText || '').trim(),
     blob: null,
     url: url,
     type: 'video/mp4',
@@ -506,7 +509,9 @@ window.onNativeClipRecorded = function(index, url, answerStartSecValue) {
   el('stopRecordBtn').disabled = true;
   el('retakeBtn').disabled = false;
   el('nextBtn').disabled = false;
-  captionBox.textContent = 'הצילום נשמר. את הכתוביות אפשר לתקן בסוף הראיון.';
+  captionBox.textContent = clips[index].transcript
+    ? 'כתוביות אוטומטיות: ' + clips[index].transcript
+    : 'הצילום נשמר. לא זוהה תמלול אוטומטי, ואפשר להקליד כתוביות בסוף.';
 };
 
 window.onNativeClipCancelled = function(index) {
@@ -705,16 +710,22 @@ function drawVideoCover(ctx, video) {
   ctx.drawImage(video, x, y, w, h);
 }
 
-function captionChunk(text, progress) {
+function captionChunkInfo(text, progress) {
   const words = String(text || '').trim().split(/\s+/).filter(Boolean);
-  if (!words.length) return '';
-  const perChunk = 7;
+  if (!words.length) return { text: '', phase: 0, index: 0, count: 0 };
+  const perChunk = 6;
   const chunks = [];
   for (let i = 0; i < words.length; i += perChunk) {
     chunks.push(words.slice(i, i + perChunk).join(' '));
   }
-  const idx = Math.min(chunks.length - 1, Math.floor(Math.max(0, Math.min(0.999, progress)) * chunks.length));
-  return chunks[idx] || '';
+  const raw = Math.max(0, Math.min(0.999999, progress)) * chunks.length;
+  const idx = Math.min(chunks.length - 1, Math.floor(raw));
+  return {
+    text: chunks[idx] || '',
+    phase: raw - idx,
+    index: idx,
+    count: chunks.length
+  };
 }
 
 function drawOverlay(ctx, clip, video) {
@@ -733,19 +744,43 @@ function drawOverlay(ctx, clip, video) {
 
   if (t >= answerAt && clip.transcript) {
     const p = (t - answerAt) / Math.max(0.5, duration - answerAt);
-    const text = captionChunk(clip.transcript, p);
+    const info = captionChunkInfo(clip.transcript, p);
+    const text = info.text;
+
     if (text) {
+      const isPop = (settings.captionEffect || 'pop') === 'pop';
+      const introPhase = Math.min(1, info.phase * 5);
+      const scale = isPop ? 1 + (1 - introPhase) * 0.11 : 1;
+      const lift = isPop ? (1 - introPhase) * 16 : 0;
+      const alpha = isPop ? Math.min(1, 0.45 + introPhase * 0.55) : 1;
+
       ctx.font = '950 ' + settings.subtitleSize + 'px sans-serif';
-      const lines = wrapText(ctx, text, 620).slice(0, 2);
-      const boxH = Math.max(100, 34 + lines.length * (settings.subtitleSize + 12));
-      roundedRect(ctx, 38, 1280 - boxH - 70, 644, boxH, 22, 'rgba(0,0,0,0.58)');
+      ctx.direction = 'rtl';
+      const lines = wrapText(ctx, text, 600).slice(0, 2);
+      const lineHeight = settings.subtitleSize + 13;
+      const boxH = Math.max(104, 34 + lines.length * lineHeight);
+      const boxY = 1280 - boxH - 72;
+
+      roundedRect(ctx, 34, boxY, 652, boxH, 24, 'rgba(0,0,0,0.66)');
+
+      const progressWidth = Math.max(12, 596 * Math.max(0.04, info.phase));
+      roundedRect(ctx, 62, boxY + boxH - 13, progressWidth, 5, 3, 'rgba(255,255,255,0.86)');
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(360, boxY + boxH / 2 - lift);
+      ctx.scale(scale, scale);
       ctx.fillStyle = '#ffffff';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.shadowColor = '#000000';
-      ctx.shadowBlur = 7;
-      drawCenteredLines(ctx, lines, 1280 - boxH / 2 - 70, settings.subtitleSize + 12);
+      ctx.shadowBlur = 9;
+      const localStartY = -((lines.length - 1) * lineHeight) / 2;
+      lines.forEach((line, i) => ctx.fillText(line, 0, localStartY + i * lineHeight));
+      ctx.restore();
+
       ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
     }
   }
 
@@ -795,8 +830,22 @@ async function renderClipToCanvas(ctx, clip, audioCtx, audioDest) {
           resolve();
           return;
         }
+        const d = Math.max(video.duration || 1, 1);
+        const subtleZoom = 1 + Math.min(0.018, (video.currentTime / d) * 0.018);
+        ctx.save();
+        ctx.translate(360, 640);
+        ctx.scale(subtleZoom, subtleZoom);
+        ctx.translate(-360, -640);
         drawVideoCover(ctx, video);
+        ctx.restore();
         drawOverlay(ctx, clip, video);
+
+        const fadeWindow = 0.18;
+        if (d - video.currentTime < fadeWindow) {
+          const fade = 1 - Math.max(0, d - video.currentTime) / fadeWindow;
+          ctx.fillStyle = 'rgba(0,0,0,' + (fade * 0.55) + ')';
+          ctx.fillRect(0, 0, 720, 1280);
+        }
         requestAnimationFrame(draw);
       }
       requestAnimationFrame(draw);
