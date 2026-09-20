@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#111827" />
+  <title>פשוט פרשה עם ישי</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="app-shell">
+    <header class="hero">
+      <div class="logo-badge">📖</div>
+      <div>
+        <h1>פשוט פרשה עם ישי</h1>
+        <p>מראיין קולי • צילום תשובות • כתוביות בעברית</p>
+      </div>
+    </header>
+
+    <section id="setupCard" class="card">
+      <h2>מתחילים תוכנית חדשה</h2>
+      <label for="parasha">שם הפרשה</label>
+      <input id="parasha" type="text" placeholder="לדוגמה: פרשת נח" autocomplete="off" />
+
+      <label for="questionCount">כמה שאלות?</label>
+      <select id="questionCount">
+        <option value="4">4 שאלות</option>
+        <option value="5" selected>5 שאלות</option>
+        <option value="6">6 שאלות</option>
+      </select>
+
+      <button id="prepareBtn" class="primary">🎙️ הכן ראיון</button>
+      <p class="small">בגרסה הזאת האפליקציה שואלת בקול, ישי מצלם כל תשובה בנפרד, והכתוביות נשמרות יחד עם כל תשובה.</p>
+    </section>
+
+    <section id="interviewCard" class="card hidden">
+      <div class="progress-row">
+        <span id="progressText">שאלה 1 מתוך 5</span>
+        <span id="recordState" class="pill">מוכן</span>
+      </div>
+
+      <h2 id="questionText">השאלה תופיע כאן</h2>
+      <div class="actions two">
+        <button id="speakBtn">🔊 השמע שוב</button>
+        <button id="startRecordBtn" class="primary">● התחל תשובה</button>
+      </div>
+
+      <video id="preview" autoplay muted playsinline></video>
+
+      <div id="captionBox" class="caption-box">הכתוביות של ישי יופיעו כאן בזמן הדיבור</div>
+
+      <div class="actions two">
+        <button id="stopRecordBtn" class="danger" disabled>■ סיימתי לענות</button>
+        <button id="nextBtn" disabled>השאלה הבאה ←</button>
+      </div>
+    </section>
+
+    <section id="finishCard" class="card hidden">
+      <h2>🎬 הראיון הושלם</h2>
+      <p>כל תשובה נשמרה כקליפ נפרד עם טקסט הכתוביות שלה.</p>
+      <div id="clipsList" class="clips"></div>
+      <div class="actions two">
+        <button id="exportProjectBtn" class="primary">⬇️ שמור קובץ פרויקט</button>
+        <button id="restartBtn">התחל מחדש</button>
+      </div>
+      <p class="small">השלב הבא שנוסיף: חיבור אוטומטי של השאלות והקליפים, צריבת הכתוביות ויצירת Reel אחד מוכן לפרסום.</p>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
