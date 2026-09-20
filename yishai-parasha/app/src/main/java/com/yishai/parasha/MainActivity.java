@@ -45,11 +45,14 @@ public class MainActivity extends ComponentActivity implements TextToSpeech.OnIn
                     int index = data.getIntExtra("index", -1);
                     String fileName = data.getStringExtra("file_name");
                     double answerStartSec = data.getDoubleExtra("answer_start_sec", 2.5);
+                    String transcript = data.getStringExtra("transcript");
+                    if (transcript == null) transcript = "";
 
                     if (index >= 0 && fileName != null) {
                         String mediaUrl = "https://appassets.androidplatform.net/media/" + Uri.encode(fileName);
                         String js = "if(window.onNativeClipRecorded){window.onNativeClipRecorded(" +
-                                index + "," + JSONObject.quote(mediaUrl) + "," + answerStartSec + ");}";
+                                index + "," + JSONObject.quote(mediaUrl) + "," + answerStartSec + "," +
+                                JSONObject.quote(transcript) + ");}";
                         webView.evaluateJavascript(js, null);
                     }
                 } else {
