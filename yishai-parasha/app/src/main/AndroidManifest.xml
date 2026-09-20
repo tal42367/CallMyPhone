@@ -12,6 +12,10 @@
         android:theme="@style/Theme.YishaiParasha"
         android:usesCleartextTraffic="false">
         <activity
+            android:name=".RecorderActivity"
+            android:screenOrientation="portrait"
+            android:exported="false" />
+        <activity
             android:name=".MainActivity"
             android:screenOrientation="portrait"
             android:exported="true">
