@@ -18,6 +18,8 @@ let currentFinalBlob = null;
 let currentFinalUrl = null;
 let ttsDoneCallback = null;
 let ttsFallbackTimer = null;
+let nativePermissionResolve = null;
+let nativePermissionTimer = null;
 
 let settings = {
   voiceRate: 0.92,
@@ -213,23 +215,104 @@ window.onInterviewerDone = function() {
   finishTtsCallback();
 };
 
+function hasNativeMediaPermissions() {
+  try {
+    if (window.Android && typeof window.Android.hasMediaPermissions === 'function') {
+      return !!window.Android.hasMediaPermissions();
+    }
+  } catch (_) {}
+  return true;
+}
+
+function requestNativeMediaPermissions() {
+  return new Promise(resolve => {
+    if (!window.Android || typeof window.Android.requestMediaPermissions !== 'function') {
+      resolve(true);
+      return;
+    }
+
+    if (hasNativeMediaPermissions()) {
+      resolve(true);
+      return;
+    }
+
+    nativePermissionResolve = resolve;
+    if (nativePermissionTimer) clearTimeout(nativePermissionTimer);
+    nativePermissionTimer = setTimeout(() => {
+      if (nativePermissionResolve) {
+        const cb = nativePermissionResolve;
+        nativePermissionResolve = null;
+        cb(false);
+      }
+    }, 15000);
+
+    try {
+      window.Android.requestMediaPermissions();
+    } catch (_) {
+      if (nativePermissionTimer) clearTimeout(nativePermissionTimer);
+      nativePermissionTimer = null;
+      nativePermissionResolve = null;
+      resolve(false);
+    }
+  });
+}
+
+window.onNativePermissionsResult = function(granted) {
+  if (nativePermissionTimer) clearTimeout(nativePermissionTimer);
+  nativePermissionTimer = null;
+  const cb = nativePermissionResolve;
+  nativePermissionResolve = null;
+  if (cb) cb(!!granted);
+};
+
 async function ensureCamera() {
   if (stream && stream.active) return;
+
+  const nativeOk = await requestNativeMediaPermissions();
+  if (!nativeOk) {
+    const err = new Error('permission-denied');
+    err.name = 'NotAllowedError';
+    throw err;
+  }
+
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     throw new Error('camera-api');
   }
-  stream = await navigator.mediaDevices.getUserMedia({
-    video: {
-      facingMode: 'user',
-      width: { ideal: 1080 },
-      height: { ideal: 1920 }
+
+  const attempts = [
+    {
+      video: {
+        facingMode: { ideal: 'user' },
+        width: { ideal: 1080 },
+        height: { ideal: 1920 }
+      },
+      audio: true
     },
-    audio: {
-      echoCancellation: false,
-      noiseSuppression: false,
-      autoGainControl: true
+    {
+      video: { facingMode: 'user' },
+      audio: true
+    },
+    {
+      video: true,
+      audio: true
     }
-  });
+  ];
+
+  let lastError = null;
+  for (const constraints of attempts) {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      if (stream && stream.active) break;
+    } catch (e) {
+      lastError = e;
+      stream = null;
+    }
+  }
+
+  if (!stream || !stream.active) {
+    throw lastError || new Error('camera-open-failed');
+  }
+
   preview.srcObject = stream;
   await preview.play().catch(() => {});
 }
@@ -298,7 +381,12 @@ el('startInterviewBtn').onclick = async () => {
   try {
     await ensureCamera();
   } catch (e) {
-    alert('לא הצלחתי לפתוח מצלמה או מיקרופון. בדוק שההרשאות של האפליקציה מאושרות ונסה שוב.');
+    const code = e && (e.name || e.message) ? String(e.name || e.message) : 'unknown';
+    if (code.includes('NotAllowed') || code.includes('permission')) {
+      alert('האפליקציה עדיין לא קיבלה הרשאה למצלמה ולמיקרופון. לחץ שוב על התחלת הראיון ואשר את שתי ההרשאות של Android.');
+    } else {
+      alert('לא הצלחתי לפתוח את המצלמה והמיקרופון (' + code + '). אני מנסה הגדרות מצלמה פשוטות אוטומטית; אם ההודעה חוזרת, שלח לי צילום שלה.');
+    }
     return;
   }
   showScreen('interviewScreen');
