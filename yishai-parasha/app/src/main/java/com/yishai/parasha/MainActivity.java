@@ -6,6 +6,7 @@ import android.app.Activity;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
@@ -96,16 +97,50 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                     result != TextToSpeech.LANG_NOT_SUPPORTED;
             tts.setSpeechRate(0.92f);
             tts.setPitch(0.95f);
+
+            tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                @Override
+                public void onStart(String utteranceId) { }
+
+                @Override
+                public void onDone(String utteranceId) {
+                    if ("yishai_interviewer".equals(utteranceId)) {
+                        notifyWebTtsDone();
+                    }
+                }
+
+                @Override
+                public void onError(String utteranceId) {
+                    if ("yishai_interviewer".equals(utteranceId)) {
+                        notifyWebTtsDone();
+                    }
+                }
+            });
         }
+    }
+
+    private void notifyWebTtsDone() {
+        runOnUiThread(() -> {
+            if (webView != null) {
+                webView.evaluateJavascript(
+                        "if(window.onInterviewerDone){window.onInterviewerDone();}",
+                        null
+                );
+            }
+        });
     }
 
     public class AndroidBridge {
         @JavascriptInterface
-        public void speak(final String text) {
+        public void speak(final String text, final double rate) {
             runOnUiThread(() -> {
                 if (ttsReady) {
+                    float safeRate = (float)Math.max(0.65, Math.min(1.25, rate));
+                    tts.setSpeechRate(safeRate);
                     tts.stop();
                     tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "yishai_interviewer");
+                } else {
+                    notifyWebTtsDone();
                 }
             });
         }
