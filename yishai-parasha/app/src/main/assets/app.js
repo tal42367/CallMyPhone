@@ -30,6 +30,7 @@ let settings = {
   introSeconds: 2.2,
   captionEffect: 'pop',
   aiCaptions: true,
+  translateToHebrew: true,
   openaiApiKey: '',
   backgroundMusic: true,
   musicVolume: 0.06,
@@ -55,6 +56,7 @@ function loadSettings() {
   el('introSeconds').value = String(settings.introSeconds);
   if (el('captionEffect')) el('captionEffect').value = settings.captionEffect || 'pop';
   if (el('aiCaptions')) el('aiCaptions').checked = settings.aiCaptions !== false;
+  if (el('translateToHebrew')) el('translateToHebrew').checked = settings.translateToHebrew !== false;
   if (el('openaiApiKey')) el('openaiApiKey').value = settings.openaiApiKey || '';
   if (el('backgroundMusic')) el('backgroundMusic').checked = settings.backgroundMusic !== false;
   if (el('musicVolume')) el('musicVolume').value = String(settings.musicVolume ?? 0.06);
@@ -70,6 +72,7 @@ function readSettingsFromUi() {
   settings.introSeconds = Number(el('introSeconds').value);
   if (el('captionEffect')) settings.captionEffect = el('captionEffect').value || 'pop';
   if (el('aiCaptions')) settings.aiCaptions = !!el('aiCaptions').checked;
+  if (el('translateToHebrew')) settings.translateToHebrew = !!el('translateToHebrew').checked;
   if (el('openaiApiKey')) settings.openaiApiKey = el('openaiApiKey').value.trim();
   if (el('backgroundMusic')) settings.backgroundMusic = !!el('backgroundMusic').checked;
   if (el('musicVolume')) settings.musicVolume = Number(el('musicVolume').value);
@@ -543,14 +546,17 @@ window.onNativeClipRecorded = function(index, url, answerStartSecValue, transcri
   ) {
     pendingTranscriptions++;
     clips[index].transcribing = true;
-    el('recordState').textContent = 'מכין כתוביות AI…';
-    captionBox.textContent = 'מכין כתוביות AI מדויקות בעברית…';
+    el('recordState').textContent = settings.translateToHebrew ? 'מתמלל ומתרגם לעברית…' : 'מכין כתוביות AI…';
+    captionBox.textContent = settings.translateToHebrew
+      ? 'מזהה את שפת הדיבור ומתרגם את הכתוביות לעברית…'
+      : 'מכין כתוביות AI…';
     try {
       window.Android.transcribeClip(
         index,
         url,
         settings.openaiApiKey,
-        sessionName + '. ' + questions[index]
+        sessionName + '. ' + questions[index],
+        !!settings.translateToHebrew
       );
     } catch (_) {
       clips[index].transcribing = false;
@@ -565,9 +571,9 @@ window.onCloudTranscript = function(index, text) {
   clips[index].transcript = String(text || '').trim();
   pendingTranscriptions = Math.max(0, pendingTranscriptions - 1);
   if (currentIndex === index) {
-    el('recordState').textContent = 'כתוביות AI מוכנות';
+    el('recordState').textContent = settings.translateToHebrew ? 'תרגום לעברית מוכן' : 'כתוביות AI מוכנות';
     captionBox.textContent = clips[index].transcript
-      ? 'כתוביות AI: ' + clips[index].transcript
+      ? (settings.translateToHebrew ? 'כתוביות בעברית: ' : 'כתוביות AI: ') + clips[index].transcript
       : 'לא זוהה טקסט. אפשר לתקן ידנית בסוף.';
   }
 };
