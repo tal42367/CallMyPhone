@@ -119,8 +119,8 @@ object LocalWhisper {
         var connection: HttpURLConnection? = null
 
         try {
-            var connected = false
-            repeat(6) {
+            var redirects = 0
+            while (true) {
                 val conn = currentUrl.openConnection() as HttpURLConnection
                 connection = conn
                 conn.instanceFollowRedirects = false
@@ -132,18 +132,21 @@ object LocalWhisper {
 
                 val code = conn.responseCode
                 if (code in 300..399) {
+                    if (redirects >= 6) {
+                        throw IllegalStateException("too many model redirects")
+                    }
                     val location = conn.getHeaderField("Location")
                         ?: throw IllegalStateException("model redirect failed")
                     conn.disconnect()
                     currentUrl = URL(currentUrl, location)
-                } else {
-                    connected = true
-                    return@repeat
+                    redirects++
+                    continue
                 }
+                break
             }
 
             val conn = connection ?: throw IllegalStateException("model connection failed")
-            if (!connected || conn.responseCode !in 200..299) {
+            if (conn.responseCode !in 200..299) {
                 throw IllegalStateException("model download HTTP ${conn.responseCode}")
             }
 
