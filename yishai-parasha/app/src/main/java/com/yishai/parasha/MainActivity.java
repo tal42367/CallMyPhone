@@ -22,7 +22,15 @@ import androidx.webkit.WebViewAssetLoader;
 
 import org.json.JSONObject;
 
+import java.io.BufferedReader;
+import java.io.DataOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
 public class MainActivity extends ComponentActivity implements TextToSpeech.OnInitListener {
@@ -156,6 +164,110 @@ public class MainActivity extends ComponentActivity implements TextToSpeech.OnIn
         });
     }
 
+
+    private File fileFromMediaUrl(String mediaUrl) {
+        try {
+            String prefix = "https://appassets.androidplatform.net/media/";
+            if (mediaUrl == null || !mediaUrl.startsWith(prefix)) return null;
+            String name = Uri.decode(mediaUrl.substring(prefix.length()));
+            File f = new File(recordingsDir, name);
+            if (!f.exists()) return null;
+            return f;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void notifyCloudTranscript(int index, String text) {
+        runOnUiThread(() -> {
+            if (webView == null) return;
+            String js = "if(window.onCloudTranscript){window.onCloudTranscript(" +
+                    index + "," + JSONObject.quote(text == null ? "" : text) + ");}";
+            webView.evaluateJavascript(js, null);
+        });
+    }
+
+    private void notifyCloudTranscriptError(int index, String message) {
+        runOnUiThread(() -> {
+            if (webView == null) return;
+            String js = "if(window.onCloudTranscriptError){window.onCloudTranscriptError(" +
+                    index + "," + JSONObject.quote(message == null ? "transcription failed" : message) + ");}";
+            webView.evaluateJavascript(js, null);
+        });
+    }
+
+    private String readText(InputStream input) throws Exception {
+        BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8));
+        StringBuilder sb = new StringBuilder();
+        String line;
+        while ((line = reader.readLine()) != null) sb.append(line);
+        return sb.toString();
+    }
+
+    private void transcribeWithOpenAI(int index, File file, String apiKey, String prompt) {
+        new Thread(() -> {
+            HttpURLConnection conn = null;
+            try {
+                String boundary = "----YishaiBoundary" + System.currentTimeMillis();
+                URL url = new URL("https://api.openai.com/v1/audio/transcriptions");
+                conn = (HttpURLConnection) url.openConnection();
+                conn.setConnectTimeout(30000);
+                conn.setReadTimeout(180000);
+                conn.setDoOutput(true);
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Authorization", "Bearer " + apiKey);
+                conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+
+                try (DataOutputStream out = new DataOutputStream(conn.getOutputStream())) {
+                    writeFormField(out, boundary, "model", "gpt-4o-transcribe");
+                    writeFormField(out, boundary, "language", "he");
+                    if (prompt != null && !prompt.trim().isEmpty()) {
+                        writeFormField(out, boundary, "prompt", prompt.trim());
+                    }
+
+                    out.writeBytes("--" + boundary + "\r\n");
+                    out.writeBytes("Content-Disposition: form-data; name=\"file\"; filename=\"answer.mp4\"\r\n");
+                    out.writeBytes("Content-Type: video/mp4\r\n\r\n");
+
+                    try (FileInputStream fis = new FileInputStream(file)) {
+                        byte[] buffer = new byte[64 * 1024];
+                        int read;
+                        while ((read = fis.read(buffer)) != -1) {
+                            out.write(buffer, 0, read);
+                        }
+                    }
+
+                    out.writeBytes("\r\n--" + boundary + "--\r\n");
+                    out.flush();
+                }
+
+                int code = conn.getResponseCode();
+                InputStream body = code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream();
+                String response = body != null ? readText(body) : "";
+
+                if (code < 200 || code >= 300) {
+                    notifyCloudTranscriptError(index, "HTTP " + code);
+                    return;
+                }
+
+                JSONObject json = new JSONObject(response);
+                String text = json.optString("text", "").trim();
+                notifyCloudTranscript(index, text);
+            } catch (Exception e) {
+                notifyCloudTranscriptError(index, e.getClass().getSimpleName());
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        }).start();
+    }
+
+    private void writeFormField(DataOutputStream out, String boundary, String name, String value) throws Exception {
+        out.writeBytes("--" + boundary + "\r\n");
+        out.writeBytes("Content-Disposition: form-data; name=\"" + name + "\"\r\n\r\n");
+        out.write(value.getBytes(StandardCharsets.UTF_8));
+        out.writeBytes("\r\n");
+    }
+
     public class AndroidBridge {
         @JavascriptInterface
         public void speak(final String text, final double rate) {
@@ -216,6 +328,25 @@ public class MainActivity extends ComponentActivity implements TextToSpeech.OnIn
                 intent.putExtra("include_reaction", includeReaction);
                 recorderLauncher.launch(intent);
             });
+        }
+
+        @JavascriptInterface
+        public void transcribeClip(
+                final int index,
+                final String mediaUrl,
+                final String apiKey,
+                final String prompt
+        ) {
+            if (apiKey == null || apiKey.trim().isEmpty()) {
+                notifyCloudTranscriptError(index, "missing API key");
+                return;
+            }
+            File file = fileFromMediaUrl(mediaUrl);
+            if (file == null) {
+                notifyCloudTranscriptError(index, "clip not found");
+                return;
+            }
+            transcribeWithOpenAI(index, file, apiKey.trim(), prompt);
         }
 
         @JavascriptInterface
