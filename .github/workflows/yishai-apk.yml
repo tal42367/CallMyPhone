@@ -31,6 +31,10 @@ jobs:
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null || true
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
+      - name: Generate Yishai background music
+        working-directory: yishai-parasha
+        run: python3 scripts/generate_music.py
+
       - name: Build debug APK
         working-directory: yishai-parasha
         run: gradle :app:assembleDebug --stacktrace
