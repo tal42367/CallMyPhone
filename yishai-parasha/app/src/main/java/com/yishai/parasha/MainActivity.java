@@ -20,6 +20,7 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.webkit.WebViewAssetLoader;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
@@ -204,7 +205,13 @@ public class MainActivity extends ComponentActivity implements TextToSpeech.OnIn
         return sb.toString();
     }
 
-    private void transcribeWithOpenAI(int index, File file, String apiKey, String prompt) {
+    private void transcribeWithOpenAI(
+            int index,
+            File file,
+            String apiKey,
+            String prompt,
+            boolean translateToHebrew
+    ) {
         new Thread(() -> {
             HttpURLConnection conn = null;
             try {
@@ -220,9 +227,14 @@ public class MainActivity extends ComponentActivity implements TextToSpeech.OnIn
 
                 try (DataOutputStream out = new DataOutputStream(conn.getOutputStream())) {
                     writeFormField(out, boundary, "model", "gpt-4o-transcribe");
-                    writeFormField(out, boundary, "language", "he");
-                    if (prompt != null && !prompt.trim().isEmpty()) {
-                        writeFormField(out, boundary, "prompt", prompt.trim());
+
+                    // When true translation is requested, do not force Hebrew here.
+                    // Let transcription detect the spoken language first.
+                    if (!translateToHebrew) {
+                        writeFormField(out, boundary, "language", "he");
+                        if (prompt != null && !prompt.trim().isEmpty()) {
+                            writeFormField(out, boundary, "prompt", prompt.trim());
+                        }
                     }
 
                     out.writeBytes("--" + boundary + "\r\n");
@@ -246,19 +258,94 @@ public class MainActivity extends ComponentActivity implements TextToSpeech.OnIn
                 String response = body != null ? readText(body) : "";
 
                 if (code < 200 || code >= 300) {
-                    notifyCloudTranscriptError(index, "HTTP " + code);
+                    notifyCloudTranscriptError(index, "Transcription HTTP " + code);
                     return;
                 }
 
                 JSONObject json = new JSONObject(response);
-                String text = json.optString("text", "").trim();
-                notifyCloudTranscript(index, text);
+                String sourceText = json.optString("text", "").trim();
+
+                if (sourceText.isEmpty()) {
+                    notifyCloudTranscript(index, "");
+                    return;
+                }
+
+                if (!translateToHebrew) {
+                    notifyCloudTranscript(index, sourceText);
+                    return;
+                }
+
+                String hebrew = translateTextToHebrew(apiKey, sourceText);
+                notifyCloudTranscript(index, hebrew);
             } catch (Exception e) {
                 notifyCloudTranscriptError(index, e.getClass().getSimpleName());
             } finally {
                 if (conn != null) conn.disconnect();
             }
         }).start();
+    }
+
+    private String translateTextToHebrew(String apiKey, String sourceText) throws Exception {
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL("https://api.openai.com/v1/responses");
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(30000);
+            conn.setReadTimeout(90000);
+            conn.setDoOutput(true);
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Authorization", "Bearer " + apiKey);
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+
+            JSONObject request = new JSONObject();
+            request.put("model", "gpt-5.6-luna");
+            request.put(
+                    "input",
+                    "Translate the following spoken transcript faithfully into natural Hebrew. " +
+                    "If it is already Hebrew, keep the wording in Hebrew and only normalize obvious punctuation. " +
+                    "Do not explain, label, summarize, or add anything. Return only the Hebrew subtitle text.\n\n" +
+                    sourceText
+            );
+            request.put("max_output_tokens", 1200);
+
+            byte[] payload = request.toString().getBytes(StandardCharsets.UTF_8);
+            try (DataOutputStream out = new DataOutputStream(conn.getOutputStream())) {
+                out.write(payload);
+                out.flush();
+            }
+
+            int code = conn.getResponseCode();
+            InputStream body = code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream();
+            String response = body != null ? readText(body) : "";
+
+            if (code < 200 || code >= 300) {
+                throw new IllegalStateException("Translation HTTP " + code);
+            }
+
+            JSONObject json = new JSONObject(response);
+            JSONArray output = json.optJSONArray("output");
+            if (output != null) {
+                for (int i = 0; i < output.length(); i++) {
+                    JSONObject item = output.optJSONObject(i);
+                    if (item == null) continue;
+                    JSONArray content = item.optJSONArray("content");
+                    if (content == null) continue;
+
+                    for (int j = 0; j < content.length(); j++) {
+                        JSONObject part = content.optJSONObject(j);
+                        if (part == null) continue;
+                        if ("output_text".equals(part.optString("type"))) {
+                            String text = part.optString("text", "").trim();
+                            if (!text.isEmpty()) return text;
+                        }
+                    }
+                }
+            }
+
+            throw new IllegalStateException("No Hebrew translation returned");
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
     }
 
     private void writeFormField(DataOutputStream out, String boundary, String name, String value) throws Exception {
@@ -335,7 +422,8 @@ public class MainActivity extends ComponentActivity implements TextToSpeech.OnIn
                 final int index,
                 final String mediaUrl,
                 final String apiKey,
-                final String prompt
+                final String prompt,
+                final boolean translateToHebrew
         ) {
             if (apiKey == null || apiKey.trim().isEmpty()) {
                 notifyCloudTranscriptError(index, "missing API key");
@@ -346,7 +434,7 @@ public class MainActivity extends ComponentActivity implements TextToSpeech.OnIn
                 notifyCloudTranscriptError(index, "clip not found");
                 return;
             }
-            transcribeWithOpenAI(index, file, apiKey.trim(), prompt);
+            transcribeWithOpenAI(index, file, apiKey.trim(), prompt, translateToHebrew);
         }
 
         @JavascriptInterface
