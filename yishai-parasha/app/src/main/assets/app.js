@@ -23,6 +23,7 @@ let nativePermissionTimer = null;
 let pendingTranscriptions = 0;
 
 let settings = {
+  voiceStyle: 'male',
   voiceRate: 0.92,
   subtitleSize: 40,
   showQuestionInVideo: true,
@@ -48,6 +49,7 @@ function loadSettings() {
     const saved = JSON.parse(localStorage.getItem('yishai_settings') || '{}');
     settings = Object.assign(settings, saved);
   } catch (_) {}
+  if (el('voiceStyle')) el('voiceStyle').value = settings.voiceStyle || 'male';
   el('voiceRate').value = settings.voiceRate;
   el('voiceRateValue').textContent = Number(settings.voiceRate).toFixed(2);
   el('subtitleSize').value = String(settings.subtitleSize);
@@ -65,6 +67,7 @@ function loadSettings() {
 }
 
 function readSettingsFromUi() {
+  if (el('voiceStyle')) settings.voiceStyle = el('voiceStyle').value || 'male';
   settings.voiceRate = Number(el('voiceRate').value);
   settings.subtitleSize = Number(el('subtitleSize').value);
   settings.showQuestionInVideo = el('showQuestionInVideo').checked;
@@ -203,7 +206,11 @@ function speak(text, done) {
 
   if (window.Android && typeof window.Android.speak === 'function') {
     try {
-      window.Android.speak(text, Number(settings.voiceRate));
+      window.Android.speak(
+        text,
+        Number(settings.voiceRate),
+        settings.voiceStyle === 'male' ? 0.78 : 0.95
+      );
       if (ttsDoneCallback) {
         const ms = Math.max(1600, Math.min(9500, 500 + text.length * 72 / Math.max(0.7, settings.voiceRate)));
         ttsFallbackTimer = setTimeout(() => finishTtsCallback(), ms);
@@ -446,6 +453,7 @@ el('startRecordBtn').onclick = () => {
         currentIndex,
         questions[currentIndex],
         Number(settings.voiceRate),
+        settings.voiceStyle === 'male' ? 0.78 : 0.95,
         !!(settings.interviewerReaction && currentIndex > 0)
       );
     } catch (_) {
