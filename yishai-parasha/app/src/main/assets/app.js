@@ -546,26 +546,39 @@ window.onNativeClipRecorded = function(index, url, answerStartSecValue, transcri
     ? 'כתוביות ראשוניות: ' + clips[index].transcript
     : 'הצילום נשמר.';
 
-  if (
-    settings.aiCaptions &&
-    settings.openaiApiKey &&
-    window.Android &&
-    typeof window.Android.transcribeClip === 'function'
-  ) {
+  if (settings.aiCaptions && window.Android) {
     pendingTranscriptions++;
     clips[index].transcribing = true;
-    el('recordState').textContent = settings.translateToHebrew ? 'מתמלל ומתרגם לעברית…' : 'מכין כתוביות AI…';
-    captionBox.textContent = settings.translateToHebrew
-      ? 'מזהה את שפת הדיבור ומתרגם את הכתוביות לעברית…'
-      : 'מכין כתוביות AI…';
+
+    const wantsCloudTranslation = !!(
+      settings.translateToHebrew &&
+      settings.openaiApiKey &&
+      typeof window.Android.transcribeClip === 'function'
+    );
+
     try {
-      window.Android.transcribeClip(
-        index,
-        url,
-        settings.openaiApiKey,
-        sessionName + '. ' + questions[index],
-        !!settings.translateToHebrew
-      );
+      if (wantsCloudTranslation) {
+        el('recordState').textContent = 'מתמלל ומתרגם לעברית…';
+        captionBox.textContent = 'מזהה את שפת הדיבור ומתרגם לעברית…';
+        window.Android.transcribeClip(
+          index,
+          url,
+          settings.openaiApiKey,
+          sessionName + '. ' + questions[index],
+          true
+        );
+      } else if (typeof window.Android.transcribeLocalClip === 'function') {
+        el('recordState').textContent = 'מכין כתוביות בעברית…';
+        captionBox.textContent = 'מכין כתוביות בעברית. בפעם הראשונה תיתכן הורדה של מנוע הכתוביות…';
+        window.Android.transcribeLocalClip(
+          index,
+          url,
+          Number(clips[index].answerStartSec || 0)
+        );
+      } else {
+        clips[index].transcribing = false;
+        pendingTranscriptions = Math.max(0, pendingTranscriptions - 1);
+      }
     } catch (_) {
       clips[index].transcribing = false;
       pendingTranscriptions = Math.max(0, pendingTranscriptions - 1);
@@ -577,12 +590,53 @@ window.onCloudTranscript = function(index, text) {
   if (index < 0 || index >= clips.length || !clips[index]) return;
   clips[index].transcribing = false;
   clips[index].transcript = String(text || '').trim();
+  clips[index].segments = null;
   pendingTranscriptions = Math.max(0, pendingTranscriptions - 1);
   if (currentIndex === index) {
     el('recordState').textContent = settings.translateToHebrew ? 'תרגום לעברית מוכן' : 'כתוביות AI מוכנות';
     captionBox.textContent = clips[index].transcript
       ? (settings.translateToHebrew ? 'כתוביות בעברית: ' : 'כתוביות AI: ') + clips[index].transcript
       : 'לא זוהה טקסט. אפשר לתקן ידנית בסוף.';
+  }
+};
+
+
+window.onLocalCaptionProgress = function(index, percent, status) {
+  if (index < 0 || index >= clips.length || !clips[index]) return;
+  if (currentIndex === index) {
+    el('recordState').textContent = String(percent || 0) + '%';
+    captionBox.textContent = status || 'מכין כתוביות בעברית…';
+  }
+};
+
+window.onLocalTranscript = function(index, text, segmentsJson) {
+  if (index < 0 || index >= clips.length || !clips[index]) return;
+  clips[index].transcribing = false;
+  clips[index].transcript = String(text || '').trim();
+  try {
+    const parsed = JSON.parse(segmentsJson || '[]');
+    clips[index].segments = Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    clips[index].segments = [];
+  }
+  pendingTranscriptions = Math.max(0, pendingTranscriptions - 1);
+
+  if (currentIndex === index) {
+    el('recordState').textContent = 'כתוביות בעברית מוכנות';
+    captionBox.textContent = clips[index].transcript
+      ? 'כתוביות: ' + clips[index].transcript
+      : 'לא זוהה טקסט. אפשר לתקן ידנית בסוף.';
+  }
+};
+
+window.onLocalCaptionError = function(index, message) {
+  if (index >= 0 && index < clips.length && clips[index]) {
+    clips[index].transcribing = false;
+  }
+  pendingTranscriptions = Math.max(0, pendingTranscriptions - 1);
+  if (currentIndex === index) {
+    el('recordState').textContent = 'הצילום נשמר';
+    captionBox.textContent = 'לא הצלחתי ליצור כתוביות אוטומטיות. אפשר לתקן ידנית בסוף.';
   }
 };
 
@@ -826,8 +880,30 @@ function drawOverlay(ctx, clip, video) {
   }
 
   if (t >= answerAt && clip.transcript) {
-    const p = (t - answerAt) / Math.max(0.5, duration - answerAt);
-    const info = captionChunkInfo(clip.transcript, p);
+    const localMs = Math.max(0, (t - answerAt) * 1000);
+    let info = null;
+
+    if (Array.isArray(clip.segments) && clip.segments.length) {
+      const seg = clip.segments.find(s =>
+        localMs >= Number(s.startMs || 0) &&
+        localMs <= Number(s.endMs || 0) + 120
+      );
+      if (seg) {
+        const start = Number(seg.startMs || 0);
+        const end = Math.max(start + 250, Number(seg.endMs || start + 1000));
+        info = {
+          text: String(seg.text || '').trim(),
+          phase: Math.max(0, Math.min(1, (localMs - start) / (end - start))),
+          index: 0,
+          count: clip.segments.length
+        };
+      }
+    }
+
+    if (!info) {
+      const p = (t - answerAt) / Math.max(0.5, duration - answerAt);
+      info = captionChunkInfo(clip.transcript, p);
+    }
     const text = info.text;
 
     if (text) {
@@ -890,59 +966,53 @@ async function renderCardFor(ctx, ms, subtitle, footer) {
   });
 }
 
-function startBackgroundMusic(audioCtx, audioDest) {
+async function startBackgroundMusic(audioCtx, audioDest) {
   if (!settings.backgroundMusic || Number(settings.musicVolume) <= 0) {
-    return () => {};
+    return {
+      stop: () => {},
+      setLevel: () => {}
+    };
   }
 
   const master = audioCtx.createGain();
   master.gain.setValueAtTime(Number(settings.musicVolume), audioCtx.currentTime);
   master.connect(audioDest);
 
-  const freqs = [
-    [220.00, 261.63, 329.63],
-    [174.61, 220.00, 261.63],
-    [196.00, 246.94, 293.66],
-    [164.81, 220.00, 261.63]
-  ];
+  try {
+    const res = await fetch('yishai_music_loop.mp3');
+    if (!res.ok) throw new Error('music-load');
+    const bytes = await res.arrayBuffer();
+    const buffer = await audioCtx.decodeAudioData(bytes);
 
-  const oscs = freqs[0].map((f, i) => {
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.type = i === 0 ? 'sine' : 'triangle';
-    gain.gain.value = i === 0 ? 0.30 : 0.12;
-    osc.connect(gain);
-    gain.connect(master);
-    osc.frequency.value = f;
-    osc.start();
-    return { osc, gain };
-  });
+    const source = audioCtx.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
+    source.connect(master);
+    source.start(0);
 
-  const start = audioCtx.currentTime;
-  const bar = 5.5;
-  for (let n = 0; n < 120; n++) {
-    const chord = freqs[n % freqs.length];
-    oscs.forEach((o, i) => {
-      o.osc.frequency.setValueAtTime(chord[i], start + n * bar);
-    });
+    return {
+      stop: () => {
+        try {
+          master.gain.setTargetAtTime(0, audioCtx.currentTime, 0.08);
+          source.stop(audioCtx.currentTime + 0.3);
+        } catch (_) {}
+      },
+      setLevel: level => {
+        try {
+          master.gain.setTargetAtTime(
+            Math.max(0, Number(level || 0)),
+            audioCtx.currentTime,
+            0.15
+          );
+        } catch (_) {}
+      }
+    };
+  } catch (_) {
+    return {
+      stop: () => {},
+      setLevel: () => {}
+    };
   }
-
-  const lfo = audioCtx.createOscillator();
-  const lfoGain = audioCtx.createGain();
-  lfo.type = 'sine';
-  lfo.frequency.value = 0.18;
-  lfoGain.gain.value = 0.012;
-  lfo.connect(lfoGain);
-  lfoGain.connect(master.gain);
-  lfo.start();
-
-  return () => {
-    try {
-      master.gain.setTargetAtTime(0, audioCtx.currentTime, 0.08);
-      oscs.forEach(o => o.osc.stop(audioCtx.currentTime + 0.25));
-      lfo.stop(audioCtx.currentTime + 0.25);
-    } catch (_) {}
-  };
 }
 
 function playTransitionFx(audioCtx, audioDest) {
@@ -1049,7 +1119,8 @@ async function autoEdit() {
     const finalStream = new MediaStream();
     canvasStream.getVideoTracks().forEach(t => finalStream.addTrack(t));
     audioDest.stream.getAudioTracks().forEach(t => finalStream.addTrack(t));
-    const stopMusic = startBackgroundMusic(audioCtx, audioDest);
+    const music = await startBackgroundMusic(audioCtx, audioDest);
+    music.setLevel(Number(settings.musicVolume));
 
     const outType = [
       'video/webm;codecs=vp8,opus',
@@ -1065,6 +1136,7 @@ async function autoEdit() {
 
     await renderCardFor(ctx, settings.introSeconds * 1000, sessionName, 'שאלות ותשובות על פרשת השבוע');
 
+    music.setLevel(Number(settings.musicVolume) * 0.48);
     for (let i = 0; i < clips.length; i++) {
       if (i > 0) playTransitionFx(audioCtx, audioDest);
       el('editStatus').textContent = 'עורך תשובה ' + (i + 1) + ' מתוך ' + clips.length;
@@ -1075,9 +1147,10 @@ async function autoEdit() {
 
     el('editStatus').textContent = 'מוסיף סיום';
     el('editProgress').style.width = '92%';
+    music.setLevel(Number(settings.musicVolume) * 0.82);
     await renderCardFor(ctx, 1800, 'שבת שלום!', 'נתראה בפרשה הבאה');
 
-    stopMusic();
+    music.stop();
     outRecorder.stop();
     await stopped;
     canvasStream.getTracks().forEach(t => t.stop());
