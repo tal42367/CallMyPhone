@@ -357,11 +357,13 @@ public class MainActivity extends ComponentActivity implements TextToSpeech.OnIn
 
     public class AndroidBridge {
         @JavascriptInterface
-        public void speak(final String text, final double rate) {
+        public void speak(final String text, final double rate, final double pitch) {
             runOnUiThread(() -> {
                 if (ttsReady) {
                     float safeRate = (float)Math.max(0.65, Math.min(1.25, rate));
                     tts.setSpeechRate(safeRate);
+                    float safePitch = (float)Math.max(0.65, Math.min(1.10, pitch));
+                    tts.setPitch(safePitch);
                     tts.stop();
                     tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "yishai_interviewer");
                 } else {
@@ -394,6 +396,7 @@ public class MainActivity extends ComponentActivity implements TextToSpeech.OnIn
                 final int index,
                 final String question,
                 final double rate,
+                final double pitch,
                 final boolean includeReaction
         ) {
             runOnUiThread(() -> {
@@ -412,6 +415,7 @@ public class MainActivity extends ComponentActivity implements TextToSpeech.OnIn
                 intent.putExtra("index", index);
                 intent.putExtra("question", question);
                 intent.putExtra("voice_rate", rate);
+                intent.putExtra("voice_pitch", pitch);
                 intent.putExtra("include_reaction", includeReaction);
                 recorderLauncher.launch(intent);
             });
