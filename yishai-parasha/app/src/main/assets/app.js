@@ -979,7 +979,7 @@ async function startBackgroundMusic(audioCtx, audioDest) {
   master.connect(audioDest);
 
   try {
-    const res = await fetch('yishai_music_loop.mp3');
+    const res = await fetch('yishai_music_loop.wav');
     if (!res.ok) throw new Error('music-load');
     const bytes = await res.arrayBuffer();
     const buffer = await audioCtx.decodeAudioData(bytes);
