@@ -355,6 +355,36 @@ public class MainActivity extends ComponentActivity implements TextToSpeech.OnIn
         out.writeBytes("\r\n");
     }
 
+
+    private void notifyLocalCaptionProgress(int index, int percent, String status) {
+        runOnUiThread(() -> {
+            if (webView == null) return;
+            String js = "if(window.onLocalCaptionProgress){window.onLocalCaptionProgress(" +
+                    index + "," + percent + "," + JSONObject.quote(status == null ? "" : status) + ");}";
+            webView.evaluateJavascript(js, null);
+        });
+    }
+
+    private void notifyLocalTranscript(int index, String text, String segmentsJson) {
+        runOnUiThread(() -> {
+            if (webView == null) return;
+            String safeSegments = (segmentsJson == null || segmentsJson.trim().isEmpty()) ? "[]" : segmentsJson;
+            String js = "if(window.onLocalTranscript){window.onLocalTranscript(" +
+                    index + "," + JSONObject.quote(text == null ? "" : text) + "," +
+                    JSONObject.quote(safeSegments) + ");}";
+            webView.evaluateJavascript(js, null);
+        });
+    }
+
+    private void notifyLocalTranscriptError(int index, String message) {
+        runOnUiThread(() -> {
+            if (webView == null) return;
+            String js = "if(window.onLocalCaptionError){window.onLocalCaptionError(" +
+                    index + "," + JSONObject.quote(message == null ? "local transcription failed" : message) + ");}";
+            webView.evaluateJavascript(js, null);
+        });
+    }
+
     public class AndroidBridge {
         @JavascriptInterface
         public void speak(final String text, final double rate, final double pitch) {
@@ -419,6 +449,42 @@ public class MainActivity extends ComponentActivity implements TextToSpeech.OnIn
                 intent.putExtra("include_reaction", includeReaction);
                 recorderLauncher.launch(intent);
             });
+        }
+
+
+        @JavascriptInterface
+        public void transcribeLocalClip(
+                final int index,
+                final String mediaUrl,
+                final double answerStartSec
+        ) {
+            File file = fileFromMediaUrl(mediaUrl);
+            if (file == null) {
+                notifyLocalTranscriptError(index, "clip not found");
+                return;
+            }
+
+            LocalWhisper.transcribeHebrew(
+                    MainActivity.this,
+                    file,
+                    answerStartSec,
+                    new LocalWhisper.Callback() {
+                        @Override
+                        public void onProgress(int percent, String status) {
+                            notifyLocalCaptionProgress(index, percent, status);
+                        }
+
+                        @Override
+                        public void onSuccess(String text, String segmentsJson) {
+                            notifyLocalTranscript(index, text, segmentsJson);
+                        }
+
+                        @Override
+                        public void onError(String message) {
+                            notifyLocalTranscriptError(index, message);
+                        }
+                    }
+            );
         }
 
         @JavascriptInterface
