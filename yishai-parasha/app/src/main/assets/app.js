@@ -20,6 +20,7 @@ let ttsDoneCallback = null;
 let ttsFallbackTimer = null;
 let nativePermissionResolve = null;
 let nativePermissionTimer = null;
+let pendingTranscriptions = 0;
 
 let settings = {
   voiceRate: 0.92,
@@ -27,7 +28,12 @@ let settings = {
   showQuestionInVideo: true,
   interviewerReaction: true,
   introSeconds: 2.2,
-  captionEffect: 'pop'
+  captionEffect: 'pop',
+  aiCaptions: true,
+  openaiApiKey: '',
+  backgroundMusic: true,
+  musicVolume: 0.06,
+  reelEffects: true
 };
 
 function showScreen(id) {
@@ -48,6 +54,12 @@ function loadSettings() {
   el('interviewerReaction').checked = !!settings.interviewerReaction;
   el('introSeconds').value = String(settings.introSeconds);
   if (el('captionEffect')) el('captionEffect').value = settings.captionEffect || 'pop';
+  if (el('aiCaptions')) el('aiCaptions').checked = settings.aiCaptions !== false;
+  if (el('openaiApiKey')) el('openaiApiKey').value = settings.openaiApiKey || '';
+  if (el('backgroundMusic')) el('backgroundMusic').checked = settings.backgroundMusic !== false;
+  if (el('musicVolume')) el('musicVolume').value = String(settings.musicVolume ?? 0.06);
+  if (el('musicVolumeValue')) el('musicVolumeValue').textContent = Number(settings.musicVolume ?? 0.06).toFixed(2);
+  if (el('reelEffects')) el('reelEffects').checked = settings.reelEffects !== false;
 }
 
 function readSettingsFromUi() {
@@ -57,6 +69,11 @@ function readSettingsFromUi() {
   settings.interviewerReaction = el('interviewerReaction').checked;
   settings.introSeconds = Number(el('introSeconds').value);
   if (el('captionEffect')) settings.captionEffect = el('captionEffect').value || 'pop';
+  if (el('aiCaptions')) settings.aiCaptions = !!el('aiCaptions').checked;
+  if (el('openaiApiKey')) settings.openaiApiKey = el('openaiApiKey').value.trim();
+  if (el('backgroundMusic')) settings.backgroundMusic = !!el('backgroundMusic').checked;
+  if (el('musicVolume')) settings.musicVolume = Number(el('musicVolume').value);
+  if (el('reelEffects')) settings.reelEffects = !!el('reelEffects').checked;
 }
 
 function saveSettings() {
@@ -78,6 +95,11 @@ el('backToSetupBtn').onclick = () => showScreen('setupScreen');
 el('voiceRate').oninput = () => {
   el('voiceRateValue').textContent = Number(el('voiceRate').value).toFixed(2);
 };
+if (el('musicVolume')) {
+  el('musicVolume').oninput = () => {
+    el('musicVolumeValue').textContent = Number(el('musicVolume').value).toFixed(2);
+  };
+}
 el('saveSettingsBtn').onclick = () => {
   saveSettings();
   goHome();
@@ -510,8 +532,55 @@ window.onNativeClipRecorded = function(index, url, answerStartSecValue, transcri
   el('retakeBtn').disabled = false;
   el('nextBtn').disabled = false;
   captionBox.textContent = clips[index].transcript
-    ? 'כתוביות אוטומטיות: ' + clips[index].transcript
-    : 'הצילום נשמר. לא זוהה תמלול אוטומטי, ואפשר להקליד כתוביות בסוף.';
+    ? 'כתוביות ראשוניות: ' + clips[index].transcript
+    : 'הצילום נשמר.';
+
+  if (
+    settings.aiCaptions &&
+    settings.openaiApiKey &&
+    window.Android &&
+    typeof window.Android.transcribeClip === 'function'
+  ) {
+    pendingTranscriptions++;
+    clips[index].transcribing = true;
+    el('recordState').textContent = 'מכין כתוביות AI…';
+    captionBox.textContent = 'מכין כתוביות AI מדויקות בעברית…';
+    try {
+      window.Android.transcribeClip(
+        index,
+        url,
+        settings.openaiApiKey,
+        sessionName + '. ' + questions[index]
+      );
+    } catch (_) {
+      clips[index].transcribing = false;
+      pendingTranscriptions = Math.max(0, pendingTranscriptions - 1);
+    }
+  }
+};
+
+window.onCloudTranscript = function(index, text) {
+  if (index < 0 || index >= clips.length || !clips[index]) return;
+  clips[index].transcribing = false;
+  clips[index].transcript = String(text || '').trim();
+  pendingTranscriptions = Math.max(0, pendingTranscriptions - 1);
+  if (currentIndex === index) {
+    el('recordState').textContent = 'כתוביות AI מוכנות';
+    captionBox.textContent = clips[index].transcript
+      ? 'כתוביות AI: ' + clips[index].transcript
+      : 'לא זוהה טקסט. אפשר לתקן ידנית בסוף.';
+  }
+};
+
+window.onCloudTranscriptError = function(index, message) {
+  if (index >= 0 && index < clips.length && clips[index]) {
+    clips[index].transcribing = false;
+  }
+  pendingTranscriptions = Math.max(0, pendingTranscriptions - 1);
+  if (currentIndex === index) {
+    el('recordState').textContent = 'הצילום נשמר';
+    captionBox.textContent = 'כתוביות AI לא נוצרו. אפשר לתקן ידנית בסוף.';
+  }
 };
 
 window.onNativeClipCancelled = function(index) {
@@ -748,10 +817,13 @@ function drawOverlay(ctx, clip, video) {
     const text = info.text;
 
     if (text) {
-      const isPop = (settings.captionEffect || 'pop') === 'pop';
+      const effect = settings.captionEffect || 'pop';
+      const isPop = effect === 'pop';
+      const isBounce = effect === 'bounce';
       const introPhase = Math.min(1, info.phase * 5);
-      const scale = isPop ? 1 + (1 - introPhase) * 0.11 : 1;
-      const lift = isPop ? (1 - introPhase) * 16 : 0;
+      const bounce = isBounce ? Math.sin(introPhase * Math.PI) * 0.14 : 0;
+      const scale = isPop ? 1 + (1 - introPhase) * 0.11 : (isBounce ? 1 + bounce : 1);
+      const lift = isPop ? (1 - introPhase) * 16 : (isBounce ? -Math.sin(introPhase * Math.PI) * 12 : 0);
       const alpha = isPop ? Math.min(1, 0.45 + introPhase * 0.55) : 1;
 
       ctx.font = '950 ' + settings.subtitleSize + 'px sans-serif';
@@ -804,6 +876,77 @@ async function renderCardFor(ctx, ms, subtitle, footer) {
   });
 }
 
+function startBackgroundMusic(audioCtx, audioDest) {
+  if (!settings.backgroundMusic || Number(settings.musicVolume) <= 0) {
+    return () => {};
+  }
+
+  const master = audioCtx.createGain();
+  master.gain.setValueAtTime(Number(settings.musicVolume), audioCtx.currentTime);
+  master.connect(audioDest);
+
+  const freqs = [
+    [220.00, 261.63, 329.63],
+    [174.61, 220.00, 261.63],
+    [196.00, 246.94, 293.66],
+    [164.81, 220.00, 261.63]
+  ];
+
+  const oscs = freqs[0].map((f, i) => {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = i === 0 ? 'sine' : 'triangle';
+    gain.gain.value = i === 0 ? 0.30 : 0.12;
+    osc.connect(gain);
+    gain.connect(master);
+    osc.frequency.value = f;
+    osc.start();
+    return { osc, gain };
+  });
+
+  const start = audioCtx.currentTime;
+  const bar = 5.5;
+  for (let n = 0; n < 120; n++) {
+    const chord = freqs[n % freqs.length];
+    oscs.forEach((o, i) => {
+      o.osc.frequency.setValueAtTime(chord[i], start + n * bar);
+    });
+  }
+
+  const lfo = audioCtx.createOscillator();
+  const lfoGain = audioCtx.createGain();
+  lfo.type = 'sine';
+  lfo.frequency.value = 0.18;
+  lfoGain.gain.value = 0.012;
+  lfo.connect(lfoGain);
+  lfoGain.connect(master.gain);
+  lfo.start();
+
+  return () => {
+    try {
+      master.gain.setTargetAtTime(0, audioCtx.currentTime, 0.08);
+      oscs.forEach(o => o.osc.stop(audioCtx.currentTime + 0.25));
+      lfo.stop(audioCtx.currentTime + 0.25);
+    } catch (_) {}
+  };
+}
+
+function playTransitionFx(audioCtx, audioDest) {
+  if (!settings.reelEffects) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(540, audioCtx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(920, audioCtx.currentTime + 0.11);
+  gain.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.035, audioCtx.currentTime + 0.025);
+  gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.15);
+  osc.connect(gain);
+  gain.connect(audioDest);
+  osc.start();
+  osc.stop(audioCtx.currentTime + 0.16);
+}
+
 async function renderClipToCanvas(ctx, clip, audioCtx, audioDest) {
   return new Promise(async (resolve, reject) => {
     const video = document.createElement('video');
@@ -831,7 +974,8 @@ async function renderClipToCanvas(ctx, clip, audioCtx, audioDest) {
           return;
         }
         const d = Math.max(video.duration || 1, 1);
-        const subtleZoom = 1 + Math.min(0.018, (video.currentTime / d) * 0.018);
+        const zoomEnabled = settings.reelEffects !== false;
+        const subtleZoom = zoomEnabled ? 1 + Math.min(0.022, (video.currentTime / d) * 0.022) : 1;
         ctx.save();
         ctx.translate(360, 640);
         ctx.scale(subtleZoom, subtleZoom);
@@ -840,11 +984,18 @@ async function renderClipToCanvas(ctx, clip, audioCtx, audioDest) {
         ctx.restore();
         drawOverlay(ctx, clip, video);
 
-        const fadeWindow = 0.18;
-        if (d - video.currentTime < fadeWindow) {
-          const fade = 1 - Math.max(0, d - video.currentTime) / fadeWindow;
-          ctx.fillStyle = 'rgba(0,0,0,' + (fade * 0.55) + ')';
-          ctx.fillRect(0, 0, 720, 1280);
+        if (settings.reelEffects !== false) {
+          const fadeWindow = 0.22;
+          if (video.currentTime < fadeWindow) {
+            const fadeIn = 1 - (video.currentTime / fadeWindow);
+            ctx.fillStyle = 'rgba(0,0,0,' + (fadeIn * 0.50) + ')';
+            ctx.fillRect(0, 0, 720, 1280);
+          }
+          if (d - video.currentTime < fadeWindow) {
+            const fade = 1 - Math.max(0, d - video.currentTime) / fadeWindow;
+            ctx.fillStyle = 'rgba(0,0,0,' + (fade * 0.58) + ')';
+            ctx.fillRect(0, 0, 720, 1280);
+          }
         }
         requestAnimationFrame(draw);
       }
@@ -857,6 +1008,9 @@ async function renderClipToCanvas(ctx, clip, audioCtx, audioDest) {
 
 async function autoEdit() {
   if (!clips.length || clips.some(c => !c)) return alert('חסרה לפחות תשובה אחת.');
+  if (pendingTranscriptions > 0 || clips.some(c => c && c.transcribing)) {
+    return alert('עדיין מכין כתוביות AI. חכה כמה שניות ונסה שוב.');
+  }
   if (!HTMLCanvasElement.prototype.captureStream || !window.MediaRecorder) {
     return alert('המכשיר הזה לא תומך כרגע בעריכה המקומית.');
   }
@@ -881,6 +1035,7 @@ async function autoEdit() {
     const finalStream = new MediaStream();
     canvasStream.getVideoTracks().forEach(t => finalStream.addTrack(t));
     audioDest.stream.getAudioTracks().forEach(t => finalStream.addTrack(t));
+    const stopMusic = startBackgroundMusic(audioCtx, audioDest);
 
     const outType = [
       'video/webm;codecs=vp8,opus',
@@ -897,6 +1052,7 @@ async function autoEdit() {
     await renderCardFor(ctx, settings.introSeconds * 1000, sessionName, 'שאלות ותשובות על פרשת השבוע');
 
     for (let i = 0; i < clips.length; i++) {
+      if (i > 0) playTransitionFx(audioCtx, audioDest);
       el('editStatus').textContent = 'עורך תשובה ' + (i + 1) + ' מתוך ' + clips.length;
       el('editProgress').style.width = String(12 + Math.round((i / clips.length) * 74)) + '%';
       await renderClipToCanvas(ctx, clips[i], audioCtx, audioDest);
@@ -907,6 +1063,7 @@ async function autoEdit() {
     el('editProgress').style.width = '92%';
     await renderCardFor(ctx, 1800, 'שבת שלום!', 'נתראה בפרשה הבאה');
 
+    stopMusic();
     outRecorder.stop();
     await stopped;
     canvasStream.getTracks().forEach(t => t.stop());
