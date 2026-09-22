@@ -22,7 +22,7 @@
       <button id="homeVideosBtn" class="home-action big">📁 הסרטונים שלי</button>
       <button id="homeSettingsBtn" class="home-action big">⚙️ הגדרות המראיין והסרטון</button>
       <div class="card info-card">
-        <strong>גרסה 0.7</strong>
+        <strong>גרסה 0.7.1</strong>
         <p>צילום Native, כתוביות AI בעברית אחרי כל תשובה, מוסיקת רקע, מעברים ואפקטי Reel. אפשר לתקן את הכתוביות לפני העריכה הסופית.</p>
       </div>
     </section>
@@ -143,6 +143,12 @@
         <span></span>
       </div>
       <div class="card">
+        <label for="voiceStyle">קול המראיין</label>
+        <select id="voiceStyle">
+          <option value="male" selected>👨 קול גברי</option>
+          <option value="normal">🎙️ קול רגיל</option>
+        </select>
+
         <label for="voiceRate">מהירות קול המראיין</label>
         <input id="voiceRate" type="range" min="0.75" max="1.15" step="0.05" value="0.92" />
         <div class="value-row"><span>איטי</span><strong id="voiceRateValue">0.92</strong><span>מהיר</span></div>
