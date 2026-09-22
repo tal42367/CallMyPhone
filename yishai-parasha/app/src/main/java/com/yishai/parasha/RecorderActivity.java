@@ -67,6 +67,7 @@ public class RecorderActivity extends ComponentActivity implements TextToSpeech.
     private int index;
     private String question;
     private double voiceRate;
+    private double voicePitch;
     private boolean includeReaction;
     private File outputFile;
     private long recordingStartedAt;
@@ -82,6 +83,7 @@ public class RecorderActivity extends ComponentActivity implements TextToSpeech.
         index = getIntent().getIntExtra("index", -1);
         question = getIntent().getStringExtra("question");
         voiceRate = getIntent().getDoubleExtra("voice_rate", 0.92);
+        voicePitch = getIntent().getDoubleExtra("voice_pitch", 0.78);
         includeReaction = getIntent().getBooleanExtra("include_reaction", false);
         if (question == null) question = "";
 
@@ -276,7 +278,7 @@ public class RecorderActivity extends ComponentActivity implements TextToSpeech.
             ttsReady = result != TextToSpeech.LANG_MISSING_DATA &&
                     result != TextToSpeech.LANG_NOT_SUPPORTED;
             tts.setSpeechRate((float)Math.max(0.65, Math.min(1.25, voiceRate)));
-            tts.setPitch(0.95f);
+            tts.setPitch((float)Math.max(0.65, Math.min(1.10, voicePitch)));
 
             tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
                 @Override public void onStart(String utteranceId) { }
