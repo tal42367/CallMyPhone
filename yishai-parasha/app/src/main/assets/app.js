@@ -847,6 +847,15 @@ function drawVideoCover(ctx, video) {
   ctx.drawImage(video, x, y, w, h);
 }
 
+function v09CaptionStyle(elm, phase) {
+  if (!elm) return;
+  const p = Math.max(0, Math.min(1, Number(phase || 0)));
+  elm.style.transform = 'translate(-50%, 0) scale(' + (0.96 + 0.04 * Math.sin(p * Math.PI)) + ')';
+  elm.style.textShadow = '0 2px 8px rgba(0,0,0,.95), 2px 2px 0 rgba(0,0,0,.8), -2px -2px 0 rgba(0,0,0,.55)';
+}
+function v09CleanCaptionText(text) {
+  return String(text || '').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+}
 function captionChunkInfo(text, progress) {
   const words = String(text || '').trim().split(/\s+/).filter(Boolean);
   if (!words.length) return { text: '', phase: 0, index: 0, count: 0 };
