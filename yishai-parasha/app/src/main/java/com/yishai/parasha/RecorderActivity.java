@@ -63,6 +63,7 @@ public class RecorderActivity extends ComponentActivity implements TextToSpeech.
     private boolean cancelRequested = false;
     private boolean shouldListen = false;
     private boolean recognitionStarting = false;
+    private boolean interruptionStopRequested = false;
 
     private int index;
     private String question;
@@ -476,6 +477,7 @@ public class RecorderActivity extends ComponentActivity implements TextToSpeech.
 
     private void stopAndSave() {
         stopButton.setEnabled(false);
+        interruptionStopRequested = false;
         cancelButton.setEnabled(false);
         statusView.setText("שומר את התשובה והכתוביות…");
         shouldListen = false;
@@ -514,6 +516,24 @@ public class RecorderActivity extends ComponentActivity implements TextToSpeech.
     }
 
     @Override
+    protected void onStop() {
+        super.onStop();
+        // If the app loses the foreground (for example an incoming call),
+        // finish the current take cleanly so the video file is not lost.
+        if (activeRecording != null && !cancelRequested && !interruptionStopRequested) {
+            interruptionStopRequested = true;
+            shouldListen = false;
+            recognitionStarting = false;
+            if (speechRecognizer != null) {
+                try { speechRecognizer.stopListening(); } catch (Exception ignored) { }
+            }
+            if (tts != null) tts.stop();
+            statusView.setText("הייתה הפרעה — שומר את התשובה…");
+            activeRecording.stop();
+        }
+    }
+
+    @Override
     public void onBackPressed() {
         cancelRecording();
     }
@@ -527,7 +547,7 @@ public class RecorderActivity extends ComponentActivity implements TextToSpeech.
             try { speechRecognizer.cancel(); } catch (Exception ignored) { }
             try { speechRecognizer.destroy(); } catch (Exception ignored) { }
         }
-        if (activeRecording != null) {
+        if (activeRecording != null && !interruptionStopRequested) {
             try { activeRecording.close(); } catch (Exception ignored) { }
         }
         if (cameraProvider != null) cameraProvider.unbindAll();
