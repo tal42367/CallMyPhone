@@ -467,7 +467,28 @@ function showResumeNotice() {
   }
   const has = restoreSession();
   if (has) {
-    s.textContent = 'נמצאה הקלטה קודמת שלא הסתיימה. אפשר להמשיך מהמקום שבו הפסקת.';
+    s.innerHTML = '';
+    const msg = document.createElement('div');
+    msg.textContent = 'נמצאה הקלטה קודמת שלא הסתיימה. אפשר להמשיך מהמקום שבו הפסקת.';
+    const btn = document.createElement('button');
+    btn.textContent = '▶️ המשך מהנקודה האחרונה';
+    btn.className = 'primary';
+    btn.style.marginTop = '10px';
+    btn.onclick = () => {
+      showScreen('questionsScreen');
+      renderQuestionEditors();
+      const firstMissing = questions.findIndex((q, i) => !clips[i]);
+      currentIndex = firstMissing >= 0 ? firstMissing : Math.min(currentIndex, questions.length - 1);
+      persistSession();
+      if (firstMissing >= 0) {
+        showScreen('questionsScreen');
+      } else {
+        showScreen('interviewScreen');
+        showCurrentQuestion();
+      }
+    };
+    s.appendChild(msg);
+    s.appendChild(btn);
     s.classList.remove('hidden');
   } else {
     s.classList.add('hidden');
