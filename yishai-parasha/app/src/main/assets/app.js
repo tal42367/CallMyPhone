@@ -407,12 +407,82 @@ function showCurrentQuestion() {
   currentTranscript = clips[currentIndex] ? (clips[currentIndex].transcript || '') : '';
 }
 
+function persistSession() {
+  try {
+    const savedClips = clips.map(c => c ? ({
+      question: c.question || '',
+      transcript: c.transcript || '',
+      url: c.native ? c.url : null,
+      type: c.type || 'video/mp4',
+      native: !!c.native,
+      answerStartSec: Number(c.answerStartSec) || 2.5,
+      segments: Array.isArray(c.segments) ? c.segments : []
+    }) : null);
+    localStorage.setItem('yishai_active_session', JSON.stringify({
+      sessionName,
+      questions,
+      currentIndex,
+      clips: savedClips,
+      savedAt: Date.now()
+    }));
+  } catch (_) {}
+}
+
+function clearPersistedSession() {
+  try { localStorage.removeItem('yishai_active_session'); } catch (_) {}
+}
+
+function restoreSession() {
+  try {
+    const raw = localStorage.getItem('yishai_active_session');
+    if (!raw) return false;
+    const s = JSON.parse(raw);
+    if (!s || !Array.isArray(s.questions) || !s.questions.length) return false;
+    questions = s.questions;
+    sessionName = s.sessionName || '';
+    currentIndex = Math.max(0, Math.min(Number(s.currentIndex) || 0, questions.length - 1));
+    clips = (s.clips || []).map(c => {
+      if (!c || !c.url || !c.native) return c || null;
+      return Object.assign({}, c, { blob: null });
+    });
+    const count = clips.filter(Boolean).length;
+    if (count) {
+      const next = clips.findIndex(c => !c);
+      currentIndex = next >= 0 ? next : Math.min(currentIndex, questions.length - 1);
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+function showResumeNotice() {
+  let s = el('resumeNotice');
+  if (!s) {
+    const host = el('homeScreen');
+    if (!host) return;
+    s = document.createElement('div');
+    s.id = 'resumeNotice';
+    s.className = 'notice hidden';
+    host.insertBefore(s, host.firstChild);
+  }
+  const has = restoreSession();
+  if (has) {
+    s.textContent = 'נמצאה הקלטה קודמת שלא הסתיימה. אפשר להמשיך מהמקום שבו הפסקת.';
+    s.classList.remove('hidden');
+  } else {
+    s.classList.add('hidden');
+  }
+}
+
 el('startInterviewBtn').onclick = async () => {
   questions = questions.map(q => q.trim()).filter(Boolean);
   if (!questions.length) return alert('צריך לפחות שאלה אחת.');
   sessionName = sessionName || el('parasha').value.trim();
-  clips = [];
-  currentIndex = 0;
+  if (!restoreSession()) {
+    clips = [];
+    currentIndex = 0;
+  }
+  persistSession();
 
   const nativeMode = window.Android && typeof window.Android.startNativeRecording === 'function';
   if (nativeMode) {
@@ -537,6 +607,7 @@ window.onNativeClipRecorded = function(index, url, answerStartSecValue, transcri
     answerStartSec: Number(answerStartSecValue) || 2.5
   };
   currentIndex = index;
+  persistSession();
   el('recordState').textContent = 'התשובה נשמרה';
   el('startRecordBtn').disabled = true;
   el('stopRecordBtn').disabled = true;
@@ -1098,244 +1169,3 @@ async function renderClipToCanvas(ctx, clip, audioCtx, audioDest) {
     }
   });
 }
-
-async function autoEdit() {
-  if (!clips.length || clips.some(c => !c)) return alert('חסרה לפחות תשובה אחת.');
-  if (pendingTranscriptions > 0 || clips.some(c => c && c.transcribing)) {
-    return alert('עדיין מכין כתוביות AI. חכה כמה שניות ונסה שוב.');
-  }
-  if (!HTMLCanvasElement.prototype.captureStream || !window.MediaRecorder) {
-    return alert('המכשיר הזה לא תומך כרגע בעריכה המקומית.');
-  }
-
-  showScreen('editingScreen');
-  el('editProgress').style.width = '4%';
-  el('editStatus').textContent = 'מכין פתיח';
-
-  try {
-    const canvas = document.createElement('canvas');
-    canvas.width = 720;
-    canvas.height = 1280;
-    const ctx = canvas.getContext('2d', { alpha: false });
-
-    const canvasStream = canvas.captureStream(30);
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) throw new Error('audio-context');
-    const audioCtx = new AC();
-    await audioCtx.resume();
-    const audioDest = audioCtx.createMediaStreamDestination();
-
-    const finalStream = new MediaStream();
-    canvasStream.getVideoTracks().forEach(t => finalStream.addTrack(t));
-    audioDest.stream.getAudioTracks().forEach(t => finalStream.addTrack(t));
-    const music = await startBackgroundMusic(audioCtx, audioDest);
-    music.setLevel(Number(settings.musicVolume));
-
-    const outType = [
-      'video/webm;codecs=vp8,opus',
-      'video/webm;codecs=vp9,opus',
-      'video/webm'
-    ].find(t => MediaRecorder.isTypeSupported(t)) || '';
-
-    const parts = [];
-    const outRecorder = outType ? new MediaRecorder(finalStream, { mimeType: outType, videoBitsPerSecond: 5000000 }) : new MediaRecorder(finalStream);
-    outRecorder.ondataavailable = e => { if (e.data && e.data.size) parts.push(e.data); };
-    const stopped = new Promise(resolve => outRecorder.onstop = resolve);
-    outRecorder.start(500);
-
-    await renderCardFor(ctx, settings.introSeconds * 1000, sessionName, 'שאלות ותשובות על פרשת השבוע');
-
-    music.setLevel(Number(settings.musicVolume) * 0.48);
-    for (let i = 0; i < clips.length; i++) {
-      if (i > 0) playTransitionFx(audioCtx, audioDest);
-      el('editStatus').textContent = 'עורך תשובה ' + (i + 1) + ' מתוך ' + clips.length;
-      el('editProgress').style.width = String(12 + Math.round((i / clips.length) * 74)) + '%';
-      await renderClipToCanvas(ctx, clips[i], audioCtx, audioDest);
-      await wait(120);
-    }
-
-    el('editStatus').textContent = 'מוסיף סיום';
-    el('editProgress').style.width = '92%';
-    music.setLevel(Number(settings.musicVolume) * 0.82);
-    await renderCardFor(ctx, 1800, 'שבת שלום!', 'נתראה בפרשה הבאה');
-
-    music.stop();
-    outRecorder.stop();
-    await stopped;
-    canvasStream.getTracks().forEach(t => t.stop());
-    await audioCtx.close();
-
-    currentFinalBlob = new Blob(parts, { type: outRecorder.mimeType || 'video/webm' });
-    if (currentFinalUrl) {
-      try { URL.revokeObjectURL(currentFinalUrl); } catch (_) {}
-    }
-    currentFinalUrl = URL.createObjectURL(currentFinalBlob);
-    el('finalVideo').src = currentFinalUrl;
-    el('editProgress').style.width = '100%';
-    await wait(250);
-    showScreen('resultScreen');
-  } catch (e) {
-    console.error(e);
-    showScreen('finishScreen');
-    alert('העריכה האוטומטית נעצרה במכשיר הזה. ההקלטות נשמרו במסך הזה ואפשר לנסות שוב.');
-  }
-}
-
-el('autoEditBtn').onclick = autoEdit;
-
-el('downloadFinalBtn').onclick = () => {
-  if (!currentFinalBlob) return;
-  const a = document.createElement('a');
-  a.href = currentFinalUrl || URL.createObjectURL(currentFinalBlob);
-  const clean = (sessionName || 'parasha').replace(/[^א-תA-Za-z0-9_-]+/g, '_');
-  a.download = 'Yishai_' + clean + '.webm';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-};
-
-el('saveFinalBtn').onclick = async () => {
-  if (!currentFinalBlob) return;
-  try {
-    await saveVideoToDb({
-      id: 'vid_' + Date.now(),
-      title: sessionName || 'פרשת השבוע',
-      createdAt: new Date().toISOString(),
-      blob: currentFinalBlob
-    });
-    el('saveFinalBtn').textContent = '✅ נשמר בסרטונים שלי';
-    el('saveFinalBtn').disabled = true;
-  } catch (_) {
-    alert('לא הצלחתי לשמור את הסרטון בתוך האפליקציה.');
-  }
-};
-
-el('newProgramBtn').onclick = () => {
-  clips.forEach(c => {
-    if (!c || !c.url) return;
-    if (c.native && window.Android && typeof window.Android.deleteRecording === 'function') {
-      try { window.Android.deleteRecording(c.url); } catch (_) {}
-    } else {
-      try { URL.revokeObjectURL(c.url); } catch (_) {}
-    }
-  });
-  clips = [];
-  questions = [];
-  currentIndex = 0;
-  currentTranscript = '';
-  currentFinalBlob = null;
-  if (currentFinalUrl) {
-    try { URL.revokeObjectURL(currentFinalUrl); } catch (_) {}
-    currentFinalUrl = null;
-  }
-  el('parasha').value = '';
-  showScreen('setupScreen');
-};
-
-function openDb() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open('yishai_parasha_db', 1);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains('videos')) {
-        db.createObjectStore('videos', { keyPath: 'id' });
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function saveVideoToDb(item) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('videos', 'readwrite');
-    tx.objectStore('videos').put(item);
-    tx.oncomplete = () => { db.close(); resolve(); };
-    tx.onerror = () => { db.close(); reject(tx.error); };
-  });
-}
-
-async function listVideosFromDb() {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('videos', 'readonly');
-    const req = tx.objectStore('videos').getAll();
-    req.onsuccess = () => {
-      const out = req.result || [];
-      db.close();
-      resolve(out.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))));
-    };
-    req.onerror = () => { db.close(); reject(req.error); };
-  });
-}
-
-async function deleteVideoFromDb(id) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('videos', 'readwrite');
-    tx.objectStore('videos').delete(id);
-    tx.oncomplete = () => { db.close(); resolve(); };
-    tx.onerror = () => { db.close(); reject(tx.error); };
-  });
-}
-
-async function renderSavedVideos() {
-  const wrap = el('savedVideosList');
-  wrap.innerHTML = '<p class="small">טוען סרטונים…</p>';
-  try {
-    const items = await listVideosFromDb();
-    wrap.innerHTML = '';
-    if (!items.length) {
-      wrap.innerHTML = '<div class="notice">עדיין אין סרטונים שמורים. אחרי עריכה אוטומטית לחץ “שמור בסרטונים שלי”.</div>';
-      return;
-    }
-
-    items.forEach(item => {
-      const div = document.createElement('div');
-      div.className = 'saved-item';
-      const title = document.createElement('strong');
-      title.textContent = item.title;
-      const meta = document.createElement('div');
-      meta.className = 'saved-meta';
-      meta.textContent = new Date(item.createdAt).toLocaleString('he-IL');
-      const vid = document.createElement('video');
-      vid.controls = true;
-      vid.playsInline = true;
-      const url = URL.createObjectURL(item.blob);
-      vid.src = url;
-
-      const actions = document.createElement('div');
-      actions.className = 'actions two';
-      const dl = document.createElement('button');
-      dl.textContent = '⬇️ הורד';
-      dl.onclick = () => {
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'Yishai_video.webm';
-        a.click();
-      };
-      const del = document.createElement('button');
-      del.textContent = '🗑️ מחק';
-      del.onclick = async () => {
-        if (!confirm('למחוק את הסרטון הזה?')) return;
-        await deleteVideoFromDb(item.id);
-        URL.revokeObjectURL(url);
-        await renderSavedVideos();
-      };
-      actions.appendChild(dl);
-      actions.appendChild(del);
-
-      div.appendChild(title);
-      div.appendChild(meta);
-      div.appendChild(vid);
-      div.appendChild(actions);
-      wrap.appendChild(div);
-    });
-  } catch (_) {
-    wrap.innerHTML = '<div class="notice">לא הצלחתי לפתוח את מאגר הסרטונים במכשיר הזה.</div>';
-  }
-}
-
-loadSettings();
-showScreen('homeScreen');
