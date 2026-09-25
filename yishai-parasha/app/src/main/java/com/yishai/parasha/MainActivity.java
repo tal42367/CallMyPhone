@@ -7,6 +7,7 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.speech.tts.TextToSpeech;
+import android.speech.tts.Voice;
 import android.speech.tts.UtteranceProgressListener;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
@@ -33,6 +34,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
+import java.util.Set;
 
 public class MainActivity extends ComponentActivity implements TextToSpeech.OnInitListener {
     private WebView webView;
@@ -115,11 +117,35 @@ public class MainActivity extends ComponentActivity implements TextToSpeech.OnIn
     @Override
     public void onInit(int status) {
         if (status == TextToSpeech.SUCCESS) {
-            int result = tts.setLanguage(new Locale("he", "IL"));
+            Locale hebrew = new Locale("he", "IL");
+            int result = tts.setLanguage(hebrew);
             ttsReady = result != TextToSpeech.LANG_MISSING_DATA &&
                     result != TextToSpeech.LANG_NOT_SUPPORTED;
-            tts.setSpeechRate(0.92f);
-            tts.setPitch(0.95f);
+
+            // Prefer the highest-quality Hebrew voice installed on the phone.
+            // This avoids forcing the older default robotic voice when a
+            // neural/enhanced Hebrew voice is available.
+            try {
+                Set<Voice> voices = tts.getVoices();
+                Voice best = null;
+                if (voices != null) {
+                    for (Voice voice : voices) {
+                        Locale vLocale = voice.getLocale();
+                        if (vLocale == null || !vLocale.getLanguage().equals("he")) continue;
+                        if (voice.isNetworkConnectionRequired()) continue;
+                        if (best == null || voice.getQuality() > best.getQuality()) {
+                            best = voice;
+                        }
+                    }
+                }
+                if (best != null) {
+                    tts.setVoice(best);
+                }
+            } catch (Exception ignored) { }
+
+            // Natural speaking cadence; keep pitch at neutral human level.
+            tts.setSpeechRate(0.88f);
+            tts.setPitch(1.00f);
 
             tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
                 @Override public void onStart(String utteranceId) { }
@@ -390,9 +416,9 @@ public class MainActivity extends ComponentActivity implements TextToSpeech.OnIn
         public void speak(final String text, final double rate, final double pitch) {
             runOnUiThread(() -> {
                 if (ttsReady) {
-                    float safeRate = (float)Math.max(0.65, Math.min(1.25, rate));
+                    float safeRate = (float)Math.max(0.72, Math.min(1.12, rate));
                     tts.setSpeechRate(safeRate);
-                    float safePitch = (float)Math.max(0.65, Math.min(1.10, pitch));
+                    float safePitch = (float)Math.max(0.90, Math.min(1.05, pitch));
                     tts.setPitch(safePitch);
                     tts.stop();
                     tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "yishai_interviewer");
